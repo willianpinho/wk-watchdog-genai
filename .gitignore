@@ -1,0 +1,63 @@
+# Planning artifacts (NEVER ship to public repo — these are prep notes)
+_planning/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.hypothesis/
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.*.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Build / runtime
+*.log
+*.sqlite
+*.db
+data/
+logs/
