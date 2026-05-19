@@ -18,8 +18,11 @@ async def client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
     db_path = tmp_path / "test.sqlite"
     settings = Settings(db_url=f"sqlite+aiosqlite:///{db_path}")
     app = create_app(settings)
-    async with app.router.lifespan_context(app), AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test",
-    ) as c:
+    async with (
+        app.router.lifespan_context(app),
+        AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as c,
+    ):
         yield c

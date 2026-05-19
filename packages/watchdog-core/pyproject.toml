@@ -13,6 +13,8 @@ license = { text = "MIT" }
 dependencies = [
   "pydantic>=2.9",
   "aiosqlite>=0.20",
+  "anthropic>=0.39",
+  "prometheus-client>=0.21",
 ]
 
 [build-system]
