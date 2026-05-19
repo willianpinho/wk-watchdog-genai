@@ -90,9 +90,17 @@ logs:  ## Tail logs from the stack.
 seed:  ## Generate synthetic traffic against the running api.
 	uv run python scripts/seed_traffic.py --rate 20
 
-demo:  ## End-to-end demo (Turn 13 — placeholder).
-	@echo "→ make up + make seed + open http://localhost:8000 + http://localhost:3000"
-	@echo "  (the full scripted demo lands in Turn 13)"
+demo:  ## End-to-end demo: 5 min synthetic traffic + planted anomaly burst + alert receipt.
+	uv run python scripts/demo.py
+
+deck:  ## Render the Marp slide deck to PDF (requires marp-cli on PATH).
+	@command -v marp >/dev/null 2>&1 || { \
+		echo "→ marp-cli not found. Install: npm i -g @marp-team/marp-cli"; \
+		echo "  or via npx: npx @marp-team/marp-cli submission/presentation.md --pdf"; \
+		exit 1; \
+	}
+	marp submission/presentation.md --pdf --output submission/presentation.pdf
+	@echo "✓ wrote submission/presentation.pdf"
 
 docker-build:  ## Build the production image (no compose).
 	docker build \

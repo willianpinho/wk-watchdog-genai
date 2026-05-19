@@ -1086,3 +1086,61 @@ schemathesis                  → unchanged from Turn 12: zero failures
 **Notes / discipline incidents:** The formatter-strip-imports race surfaced its worst form on `__init__.py`; resolved structurally via the PEP 484 `as Name` re-export pattern (not a noqa workaround). Lesson: when an aggressive formatter wins repeatedly against per-file ignores, the right move is to change the SHAPE so the code is unambiguously alive — not to add another suppressor.
 
 ---
+
+## Turn 14 — Final submission pass: README rewrite + 5 new ADRs + demo + slide deck + retrospective
+
+**Elapsed time at end of turn:** ~10:30 (cumulative, grand total).
+
+**My prompt to the assistant (verbatim):**
+
+> Final pass. Make this submittable.
+>
+> 1. Rewrite `README.md` from the ground up: mission statement, 30-second quickstart, Mermaid architecture diagram, tech-choices table with rejected-alternatives column, production-readiness matrix (done / stubbed / out-of-scope), demo section, SDK example, layout tree, tests, license. The reviewer reads this first and decides in 60 seconds whether to keep reading.
+> 2. Add ADRs 0002 (SQLite over Postgres + migration trigger), 0003 (EWMA + Welford 1962 over scipy / Prophet / river), 0004 (Anthropic `tool_use` + rule-based fallback + prompt-injection defense), 0005 (transactional outbox, Richardson 2019 §3.2, single-worker commitment for SQLite), 0006 (HTMX + uPlot vendored + Tailwind Play CDN trade-off recorded honestly).
+> 3. Create `scripts/demo.py`: 5 minutes of synthetic traffic across three services + a planted ERROR burst on `bursty-service` at minute 3 + a regex sniff of `/partials/alerts` to print the alert id and dashboard URL when the pipeline catches the burst.
+> 4. Create `submission/presentation.md`: 10-slide Marp deck (title with Tagle.ai Tag, problem, solution, GenAI specifics, production signals, quality gates, SDK, demo, trade-offs, reflection).
+> 5. Create `submission/SUBMISSION.md`: reviewer reading order (5 min / 15 min / 30 min).
+> 6. Append Turn 14 to `prompts.md` with a candid retrospective paragraph + grand-total Elapsed Time.
+> 7. Final lint/type/test gate: `make all` green. If anything is red, fix it before declaring done.
+> 8. Commit by explicit paths as `feat(turn-14): final docs + demo + presentation deck + ADR set`. This turn ALSO commits `submission/tagle-tag.{md,png}` — they've been held untracked since Turn 2 per the original instruction. Push to `master`.
+
+**Action summary:**
+
+- **README.md** — full rewrite. Mission paragraph + 30-second quickstart + Mermaid architecture diagram (with all four observability sidecars wired in) + 10-row tech-choices table with rejected alternatives + 14-row production-readiness matrix that honestly admits Authentication is **stubbed** and Multi-tenancy / Horizontal scale are **out of scope**. Layout tree, SDK example, tests block, submission packet pointer, MIT license note. CI badge wired to ghcr.io workflow on `master`.
+- **ADR-0002 SQLite over Postgres** — explicit migration trigger table (> 50 req/s, multi-tenancy, horizontal scale, SKIP LOCKED need). Bounded 4-step migration path documented.
+- **ADR-0003 EWMA + Welford 1962** — formal citation, alpha=2/61 derivation, `max(stddev, 1.0)` denominator floor rationale (prevents synthetic z-explosions on near-zero variance). Rejected scipy (~150 MB), Prophet (Stan dep), river (learning curve), naive thresholds.
+- **ADR-0004 Anthropic `tool_use`** — structured-output enforcement (`tool_choice` forced; text replies retried), prompt-injection defense in `severity_v1.md` with adversarial golden-set case, cost-guard fallback path with observable `model="rule-based-fallback"`.
+- **ADR-0005 transactional outbox** — Richardson 2019 §3.2 citation, single-worker commitment with the **honest** reason (SQLite has no `SELECT … FOR UPDATE SKIP LOCKED`), Postgres-migration unblock documented as the future N-worker path.
+- **ADR-0006 HTMX over SPA** — accepts the Tailwind Play CDN with the explicit caveat that it's appropriate only for an ops console, not a customer brand surface. uPlot vendored, page-weight assertion under 100 KB documented as an active test.
+- **scripts/demo.py** — three-phase scripted demo: 180 s baseline at ~3 events/s across `auth-api`, `checkout`, `search`; 30 s ERROR burst at 20 events/s on `bursty-service`; 90 s cooldown. Polls `/partials/alerts` with a regex sniff for `href="/alerts/<uuid>"` and prints the alert id + dashboard URL when caught.
+- **submission/presentation.md** — 10-slide Marp deck. Slide 1 leads with the Tagle.ai Tag ("The Navigator"). Slide 5 names the gates that fired (mypy strict 0 issues, 90.04 % core, 87.62 % api, schemathesis `--checks all` 0 failures). Slide 9 records the trade-offs honestly (auth stub, SDK transitive deps, single outbox worker). Slide 10 reflects on the three formatter-race incidents and the lesson.
+- **submission/SUBMISSION.md** — 5/15/30-minute reviewer reading order.
+- **Makefile** — `demo` target wired to `uv run python scripts/demo.py`; `deck` target wired to `marp` with an install hint fallback to `npx @marp-team/marp-cli`.
+- **scripts/demo.py F821 fix** — formatter dropped `import re` between Edit calls (the same race that hit `__init__.py` in Turn 13). Re-added structurally above `import sys`. `ruff check .` clean.
+
+**Verification (final gate, post-fix):**
+
+- `ruff check .` — All checks passed.
+- `black --check .` — 78 files would be left unchanged.
+- `mypy --strict` over 46 source files — Success: no issues found.
+- `pytest` — **98 passed**, 2 deselected, 30 warnings in 6.38 s. Total coverage 87.75 %.
+- `make test-core` — `watchdog_core` coverage **90.04 %**, gate ≥ 90 % satisfied.
+- `make test-api` — `watchdog_api` coverage **87.62 %**, gate ≥ 80 % satisfied.
+
+**Diff summary:** entirely under `README.md`, `docs/adr/0002…0006-*.md`, `scripts/demo.py`, `submission/{presentation,SUBMISSION}.md`, `Makefile`, `prompts.md`, plus this turn (per Turn 2's original instruction) **commits** `submission/tagle-tag.{md,png}` — held untracked since Turn 2.
+
+**Retrospective (the honest paragraph):**
+
+Three patterns repeated across 14 turns and dwarfed everything else.
+
+First, **the verification gate, not the agent ensemble, was the force multiplier.** Every time I leaned on the static stack — ruff `ALL`, black, mypy strict, pytest, schemathesis `--checks all`, per-package coverage gates with `--override-ini` to scope `--cov`, a literal source-grep for `.execute(f"…")` — the work landed. Every time I leaned on agent-handoff orchestration the overhead exceeded the value at this granularity (one developer, one repo, ~5 hours). The 3-Gate Review (code-reviewer / domain specialist / devils-advocate) is excellent for shared code in a team setting; for a single-developer Vibe-Coding session it would have been ceremony. I'd run it differently on a team product.
+
+Second, **the formatter-strip-imports race surfaced three times** (Turns 9, 10, 12) before I solved it structurally rather than tactically. The lesson — when an aggressive formatter wins repeatedly against per-file `# noqa: F401`, change the SHAPE (PEP 484 `from X import Y as Y` re-exports, dedicated leaf modules to break circular imports) — is now baked into `packages/watchdog-sdk/src/watchdog_sdk/__init__.py` and into Turn 13's notes. Cost: ~30 minutes spread across three turns; would have been zero with the structural fix from Turn 5.
+
+Third, **CI failures were the best teacher.** Three rounds of contract debugging on Turn 12 — ruff format ↔ black disagreement on multi-line asserts, schemathesis 4.x dropping `--hypothesis-deadline`, Pydantic `mode="before"` lenient coercion of `int → datetime` — exposed real correctness bugs that no static check would have found. Without `schemathesis --checks all` in CI I'd have shipped a 422 contract lie and an off-by-one on timestamp coercion. The hour spent on Turn 12 was the highest-leverage hour in the run.
+
+If I had 16 more hours (the brief's hard ceiling): real JWT verifier (auth is stubbed today), split `watchdog-core` so the SDK doesn't transitively pull `anthropic` + `aiosqlite`, Postgres adapter behind the existing repository surface to unblock the N-worker outbox, SSE `/v1/alerts/stream` (the SDK type already ships), Playwright `make demo-screenshot` to populate `docs/demo/`. Order chosen by reviewer-visibility, not by my own preference.
+
+**Staging discipline:** explicit paths only. This turn commits `submission/tagle-tag.{md,png}` per the original Turn 2 instruction ("os arquivos serão commitados no fim"). No `git add .` in any of the 14 turns.
+
+---
