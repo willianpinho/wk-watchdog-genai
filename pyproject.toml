@@ -101,6 +101,14 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel"]
   "ANN",     # tests don't need exhaustive type annotations
   "D",       # tests don't need docstrings
   "INP001",  # tests aren't a namespace package
+  "PT018",   # compound assertions are clearer than splitting in our style
+]
+"scripts/**/*.py" = [
+  "INP001",  # scripts/ is a Makefile-invoked toolbox, not a Python package
+  "T201",    # CLI tools use `print` for human-readable progress
+  "S311",    # synthetic-data generators use random; not a crypto context
+  "PLR2004", # CLI tools use small inline constants for clarity
+  "D",       # CLI tools don't need docstrings on every function
 ]
 
 [tool.ruff.lint.pydocstyle]

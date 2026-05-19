@@ -1,0 +1,58 @@
+# Keep the build context small AND keep secrets / dev-only paths out of the
+# final image. Each entry below has a documented reason.
+
+# Version control & meta
+.git
+.github
+.gitignore
+*.md
+!apps/api/src/**/*.md
+!packages/**/*.md
+LICENSE
+
+# Local development venvs and caches
+.venv
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+.coverage.*
+htmlcov
+.hypothesis
+
+# Editor / OS
+.vscode
+.idea
+.DS_Store
+*.swp
+*.swo
+
+# Tests + planning + submission (NOT shipped to runtime image)
+tests
+**/tests
+_planning
+submission
+docs
+
+# Secrets and runtime data
+.env
+.env.*
+!.env.example
+data
+logs
+*.log
+*.sqlite
+*.sqlite-journal
+*.db
+
+# Docker artefacts themselves
+Dockerfile
+.dockerignore
+docker-compose*.yml
+docker/
+
+# Node / frontend toolchains (not used)
+node_modules
+npm-debug.log

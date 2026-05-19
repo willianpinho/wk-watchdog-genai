@@ -50,9 +50,9 @@ async def test_openapi_schema_is_well_formed(client: AsyncClient) -> None:
     # `/metrics` is deliberately excluded via `include_in_schema=False` —
     # it's a Prometheus endpoint, not a JSON API consumer surface.
     for expected_path in ("/v1/events", "/healthz", "/readyz"):
-        assert expected_path in schema["paths"], (
-            f"missing {expected_path} from OpenAPI schema; saw {list(schema['paths'].keys())}"
-        )
+        assert (
+            expected_path in schema["paths"]
+        ), f"missing {expected_path} from OpenAPI schema; saw {list(schema['paths'].keys())}"
 
 
 async def test_post_events_response_conforms_to_schema(client: AsyncClient) -> None:

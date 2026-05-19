@@ -1,0 +1,14 @@
+# Provisions /var/lib/grafana/dashboards/*.json on grafana startup.
+apiVersion: 1
+
+providers:
+  - name: wk-watchdog
+    orgId: 1
+    folder: watchdog
+    type: file
+    disableDeletion: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

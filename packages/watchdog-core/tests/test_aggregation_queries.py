@@ -127,9 +127,9 @@ async def test_per_service_ts_query_uses_idx_log_events_service_ts(
     rows = await cursor.fetchall()
     await cursor.close()
     plan_text = " | ".join(str(row) for row in rows)
-    assert "idx_log_events_" in plan_text, (
-        f"expected the planner to use one of the log_events indexes, got:\n{plan_text}"
-    )
-    assert "SCAN log_events" not in plan_text or "USING INDEX" in plan_text, (
-        f"the per-service+ts query is doing a full scan:\n{plan_text}"
-    )
+    assert (
+        "idx_log_events_" in plan_text
+    ), f"expected the planner to use one of the log_events indexes, got:\n{plan_text}"
+    assert (
+        "SCAN log_events" not in plan_text or "USING INDEX" in plan_text
+    ), f"the per-service+ts query is doing a full scan:\n{plan_text}"

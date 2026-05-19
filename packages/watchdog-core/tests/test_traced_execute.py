@@ -64,9 +64,9 @@ async def test_traced_execute_returns_cursor_and_emits_span(conn: aiosqlite.Conn
 
     spans = exporter.get_finished_spans()
     sqlite_spans = [s for s in spans if s.name == "sqlite.execute"]
-    assert len(sqlite_spans) >= 2, (
-        f"expected ≥2 sqlite.execute spans, saw {[s.name for s in spans]}"
-    )
+    assert (
+        len(sqlite_spans) >= 2
+    ), f"expected ≥2 sqlite.execute spans, saw {[s.name for s in spans]}"
     for s in sqlite_spans:
         assert s.attributes is not None
         assert s.attributes.get("db.system") == "sqlite"

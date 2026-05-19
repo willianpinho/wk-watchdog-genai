@@ -3,7 +3,9 @@
 # `make all` is the local equivalent of CI: lint → type → test.
 
 .DEFAULT_GOAL := help
-.PHONY: help install lint type test test-core test-api test-slow test-contract run fmt all clean tree
+.PHONY: help install lint type test test-core test-api test-slow test-contract \
+        run fmt all clean tree \
+        up down logs seed demo docker-test docker-build
 
 # Package source roots (used by mypy + ad-hoc tooling).
 PACKAGES := \
@@ -64,3 +66,39 @@ tree:  ## Print the tracked file tree (ignores .venv, _planning, caches).
 
 clean:  ## Remove caches and venv.
 	rm -rf .venv .ruff_cache .mypy_cache .pytest_cache .coverage htmlcov data
+
+# ----------------------------------------------------------------------------
+# Docker / compose (Turn 10)
+# ----------------------------------------------------------------------------
+
+up:  ## docker compose up -d (api + otel + jaeger + prometheus + grafana).
+	GIT_REV=$$(git rev-parse HEAD 2>/dev/null || echo unknown) \
+	VERSION=$$(grep -E '^__version__' apps/api/src/watchdog_api/__init__.py | head -1 | awk -F'"' '{print $$2}') \
+	docker compose up -d --build
+	@echo ""
+	@echo "  api      :  http://localhost:8000"
+	@echo "  jaeger   :  http://localhost:16686"
+	@echo "  prom     :  http://localhost:9090"
+	@echo "  grafana  :  http://localhost:3000 (anon Viewer; admin/admin for editing)"
+
+down:  ## docker compose down (keeps volumes).
+	docker compose down
+
+logs:  ## Tail logs from the stack.
+	docker compose logs -f --tail=200
+
+seed:  ## Generate synthetic traffic against the running api.
+	uv run python scripts/seed_traffic.py --rate 20
+
+demo:  ## End-to-end demo (Turn 13 — placeholder).
+	@echo "→ make up + make seed + open http://localhost:8000 + http://localhost:3000"
+	@echo "  (the full scripted demo lands in Turn 13)"
+
+docker-build:  ## Build the production image (no compose).
+	docker build \
+		--build-arg GIT_REV=$$(git rev-parse HEAD 2>/dev/null || echo unknown) \
+		--build-arg VERSION=$$(grep -E '^__version__' apps/api/src/watchdog_api/__init__.py | head -1 | awk -F'"' '{print $$2}') \
+		-t wk-watchdog:dev .
+
+docker-test:  ## Build the image, run smoke (/healthz + /readyz), tear down.
+	bash scripts/test_docker_smoke.sh

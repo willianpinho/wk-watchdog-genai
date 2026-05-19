@@ -1,0 +1,142 @@
+# wk-watchdog — local dev / demo stack.
+#
+# Run:
+#   make up      # docker compose up -d
+#   make logs    # tail
+#   make seed    # synthetic traffic
+#   make down    # tear down
+#
+# Service map:
+#   watchdog-api    :8000  (the FastAPI app + dashboard + /metrics)
+#   jaeger          :16686 (trace UI)
+#   prometheus      :9090  (metrics UI)
+#   grafana         :3000  (pre-provisioned dashboard, admin/admin)
+#   otel-collector  :4318  (OTLP HTTP receiver; not exposed to host)
+#
+# Networks:
+#   backend         — app + persistent volume
+#   observability   — telemetry sidecars; watchdog-api joins both
+
+services:
+  watchdog-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GIT_REV: ${GIT_REV:-unknown}
+        VERSION: ${VERSION:-0.1.0}
+    image: wk-watchdog:local
+    environment:
+      WATCHDOG_ENV: dev
+      WATCHDOG_LOG_LEVEL: INFO
+      WATCHDOG_DB_URL: sqlite+aiosqlite:///data/watchdog.sqlite
+      WATCHDOG_OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318/v1/traces
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-sk-not-configured}
+    ports:
+      - "8000:8000"
+    volumes:
+      - watchdog-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request,sys; r=urllib.request.urlopen('http://localhost:8000/readyz',timeout=2); sys.exit(0 if r.status==200 else 1)",
+        ]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+    networks: [backend, observability]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./docker/otelcol-config.yaml:/etc/otelcol/config.yaml:ro
+    depends_on:
+      jaeger:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "components"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks: [observability]
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:14269/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks: [observability]
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=24h
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks: [observability]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -q -O- http://localhost:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks: [observability]
+
+volumes:
+  watchdog-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  backend:
+  observability:

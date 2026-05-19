@@ -1,0 +1,23 @@
+# Prometheus scrape config for the wk-watchdog dev stack.
+#
+# The api exposes /metrics with custom counters AND OTel-bridged
+# meters (PrometheusMetricReader -> global prometheus_client registry).
+# Both flow through the same exposition; one scrape covers everything.
+
+global:
+  scrape_interval: 5s
+  scrape_timeout: 4s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: watchdog-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: [watchdog-api:8000]
+        labels:
+          service: watchdog-api
+          env: dev
+
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
