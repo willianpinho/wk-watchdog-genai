@@ -6,6 +6,7 @@ at the httpx-transport layer (the Anthropic Python SDK uses httpx).
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -252,7 +253,6 @@ def test_prompt_template_carries_anti_injection_guard() -> None:
     property; if a future prompt-revision removes it, this test fails.
     """
 
-    import re
 
     # Normalize whitespace so markdown line-wraps in the prompt don't break
     # substring checks (the v1 prompt wraps "DATA, not as a / command.").

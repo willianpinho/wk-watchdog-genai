@@ -122,7 +122,13 @@ class AlertRepository:
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
 
-    async def insert(self, alert: Alert) -> None:
+    async def insert(self, alert: Alert, *, commit: bool = True) -> None:
+        """Insert an alert.
+
+        Set `commit=False` to compose with another statement inside
+        a single transaction (used by `AlertService.create_and_enqueue`
+        for the outbox atomicity).
+        """
         await self._conn.execute(
             "INSERT INTO alerts ("
             "  id, service, level, window_start, window_end, event_count,"
@@ -146,7 +152,21 @@ class AlertRepository:
                 alert.webhook_status,
             ),
         )
-        await self._conn.commit()
+        if commit:
+            await self._conn.commit()
+
+    async def get_by_id(self, alert_id: UUID) -> Alert | None:
+        """Lookup an alert by primary key. Returns None if absent."""
+        cursor = await self._conn.execute(
+            "SELECT id, service, level, window_start, window_end, event_count,"
+            " baseline_mean, baseline_stddev, z_score, severity, reasoning,"
+            " created_at, dispatched_at, webhook_status"
+            " FROM alerts WHERE id = ?",
+            (str(alert_id),),
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+        return self._row_to_alert(row) if row is not None else None
 
     async def list_pending(self, *, limit: int = 50) -> list[Alert]:
         cursor = await self._conn.execute(
@@ -194,7 +214,19 @@ class OutboxRepository:
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
 
-    async def enqueue(self, alert_id: UUID, payload: dict[str, Any]) -> int:
+    async def enqueue(
+        self,
+        alert_id: UUID,
+        payload: dict[str, Any],
+        *,
+        commit: bool = True,
+    ) -> int:
+        """Enqueue a webhook job.
+
+        Set `commit=False` to compose with the alert insert inside
+        the same transaction (true outbox pattern; see
+        `AlertService.create_and_enqueue`).
+        """
         now = _iso(datetime.now(UTC))
         cursor = await self._conn.execute(
             "INSERT INTO webhook_outbox"
@@ -207,7 +239,8 @@ class OutboxRepository:
                 now,
             ),
         )
-        await self._conn.commit()
+        if commit:
+            await self._conn.commit()
         return cursor.lastrowid or 0
 
     async def claim_pending(

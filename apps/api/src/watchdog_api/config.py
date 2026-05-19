@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     api_port: int = 8000
     db_url: str = f"{_SQLITE_URL_PREFIX}./data/watchdog.sqlite"
 
+    # --- Alerting (Turn 6) ---
+    webhook_target_url: str = ""  # empty → worker is NOT started by lifespan
+    webhook_secret: str = "dev-secret-change-me"  # noqa: S105 — placeholder; production uses op://
+    worker_poll_interval_seconds: float = 1.0
+
     @field_validator("db_url")
     @classmethod
     def _ensure_sqlite_url(cls, v: str) -> str:

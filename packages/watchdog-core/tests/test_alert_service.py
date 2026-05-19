@@ -15,7 +15,8 @@ class _FakeAlertRepo:
     def __init__(self) -> None:
         self.alerts: list[Alert] = []
 
-    async def insert(self, alert: Alert) -> None:
+    async def insert(self, alert: Alert, *, commit: bool = True) -> None:
+        _ = commit  # ignored in the fake; real repo respects it
         self.alerts.append(alert)
 
 
@@ -23,9 +24,28 @@ class _FakeOutbox:
     def __init__(self) -> None:
         self.calls: list[tuple[UUID, dict[str, Any]]] = []
 
-    async def enqueue(self, alert_id: UUID, payload: dict[str, Any]) -> int:
+    async def enqueue(
+        self,
+        alert_id: UUID,
+        payload: dict[str, Any],
+        *,
+        commit: bool = True,
+    ) -> int:
+        _ = commit
         self.calls.append((alert_id, payload))
         return len(self.calls)
+
+
+class _FakeUoW:
+    def __init__(self) -> None:
+        self.commits = 0
+        self.rollbacks = 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
 
 
 class _StubClassifier:
@@ -49,6 +69,7 @@ async def test_alert_service_handles_anomaly_persists_and_enqueues() -> None:
     repo = _FakeAlertRepo()
     outbox = _FakeOutbox()
     svc = AlertService(
+        uow=_FakeUoW(),
         alert_repo=repo,
         outbox_repo=outbox,
         classifier=_StubClassifier(),
@@ -84,6 +105,7 @@ async def test_alert_service_no_anomalies_is_noop() -> None:
     repo = _FakeAlertRepo()
     outbox = _FakeOutbox()
     svc = AlertService(
+        uow=_FakeUoW(),
         alert_repo=repo,
         outbox_repo=outbox,
         classifier=_StubClassifier(),
