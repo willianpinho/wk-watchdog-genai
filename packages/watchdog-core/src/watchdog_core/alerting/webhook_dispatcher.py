@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from watchdog_core.observability.metrics import WEBHOOK_DELIVERY_LATENCY
+
 if TYPE_CHECKING:
     from watchdog_core.domain.models import Alert
 
@@ -164,6 +166,7 @@ class WebhookDispatcher:
                 "webhook dispatch HTTP error",
                 extra={"alert_id": str(alert.id), "error": str(exc), "attempt": attempt},
             )
+            WEBHOOK_DELIVERY_LATENCY.labels(outcome="error").observe(latency_ms / 1000.0)
             return DispatchResult(
                 success=False,
                 status_code=None,
@@ -174,6 +177,9 @@ class WebhookDispatcher:
 
         latency_ms = int((time.monotonic() - start) * 1000)
         success = resp.is_success
+        WEBHOOK_DELIVERY_LATENCY.labels(
+            outcome="success" if success else "failure",
+        ).observe(latency_ms / 1000.0)
         return DispatchResult(
             success=success,
             status_code=resp.status_code,

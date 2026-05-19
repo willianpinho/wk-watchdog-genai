@@ -33,6 +33,9 @@ class FakeLogEventRepo:
     async def insert(self, event: LogEvent) -> None:
         self.events.append(event)
 
+    async def insert_many(self, events: list[LogEvent]) -> None:
+        self.events.extend(events)
+
     async def find_duplicate(
         self,
         *,

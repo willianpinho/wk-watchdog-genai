@@ -53,6 +53,7 @@ async def app_with_sink(tmp_path: Path):
         db_url=f"sqlite+aiosqlite:///{db_path}",
         webhook_target_url="",  # do NOT start the lifespan worker; we drive it manually
         webhook_secret=_SECRET,
+        otel_enabled=False,  # see conftest.py for the test-isolation rationale
     )
     app = create_app(settings)
     async with app.router.lifespan_context(app):

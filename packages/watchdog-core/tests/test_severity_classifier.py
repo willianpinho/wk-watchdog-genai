@@ -253,7 +253,6 @@ def test_prompt_template_carries_anti_injection_guard() -> None:
     property; if a future prompt-revision removes it, this test fails.
     """
 
-
     # Normalize whitespace so markdown line-wraps in the prompt don't break
     # substring checks (the v1 prompt wraps "DATA, not as a / command.").
     text = _load_prompt_template().lower()

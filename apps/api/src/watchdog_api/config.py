@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     webhook_secret: str = "dev-secret-change-me"  # noqa: S105 — placeholder; production uses op://
     worker_poll_interval_seconds: float = 1.0
 
+    # --- Observability (Turn 7) ---
+    otel_exporter_otlp_endpoint: str = (
+        ""  # empty → OTel still configured but exporter is a no-op-friendly default
+    )
+    otel_enabled: bool = True  # tests may set False to skip OTel setup entirely
+
     @field_validator("db_url")
     @classmethod
     def _ensure_sqlite_url(cls, v: str) -> str:

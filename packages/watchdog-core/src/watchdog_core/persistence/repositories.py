@@ -13,8 +13,12 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from opentelemetry import trace
+
 from watchdog_core.domain.hashing import compute_message_hash
 from watchdog_core.domain.models import Alert, AnomalyWindow, LogEvent
+
+_tracer = trace.get_tracer(__name__)
 
 if TYPE_CHECKING:
     import aiosqlite
@@ -34,7 +38,12 @@ class LogEventRepository:
     def __init__(self, conn: aiosqlite.Connection) -> None:
         self._conn = conn
 
-    async def insert(self, event: LogEvent) -> None:
+    async def insert(self, event: LogEvent, *, commit: bool = True) -> None:
+        """Insert a single LogEvent.
+
+        Set `commit=False` to compose with `insert_many` or another
+        statement inside a single transaction.
+        """
         await self._conn.execute(
             "INSERT INTO log_events"
             "(id, ts, service, level, message, message_hash, attributes_json)"
@@ -49,7 +58,20 @@ class LogEventRepository:
                 json.dumps(event.attributes, separators=(",", ":"), sort_keys=True),
             ),
         )
-        await self._conn.commit()
+        if commit:
+            await self._conn.commit()
+
+    async def insert_many(self, events: list[LogEvent]) -> None:
+        """Insert N events in ONE transaction, under a single OTel span.
+
+        Span name `LogEventRepository.insert_many` is asserted by the
+        observability smoke test (Turn 7).
+        """
+        with _tracer.start_as_current_span("LogEventRepository.insert_many") as span:
+            span.set_attribute("batch.size", len(events))
+            for event in events:
+                await self.insert(event, commit=False)
+            await self._conn.commit()
 
     async def list_recent(self, service: str, *, limit: int = 100) -> list[LogEvent]:
         cursor = await self._conn.execute(

@@ -16,7 +16,11 @@ from watchdog_api.main import create_app
 async def client(tmp_path: Path) -> AsyncIterator[AsyncClient]:
     """An httpx AsyncClient with a fresh app + temp SQLite, lifespan run."""
     db_path = tmp_path / "test.sqlite"
-    settings = Settings(db_url=f"sqlite+aiosqlite:///{db_path}")
+    # otel_enabled=False keeps these tests offline (no OTLP exporter
+    # poking localhost:4318) AND avoids stealing OTel's "set tracer
+    # provider once" slot from test_otel_smoke, which depends on
+    # being the first to install a SimpleSpanProcessor.
+    settings = Settings(db_url=f"sqlite+aiosqlite:///{db_path}", otel_enabled=False)
     app = create_app(settings)
     async with (
         app.router.lifespan_context(app),

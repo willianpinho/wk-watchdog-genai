@@ -37,7 +37,10 @@ def _get_or_create_counter() -> Counter:
             ["model", "kind"],
         )
     except ValueError:
-        for collector in list(REGISTRY._names_to_collectors.values()):  # noqa: SLF001 — public API has no lookup-by-name
+        # prometheus_client has no public lookup-by-name; private attr
+        # is the only stable path for re-import safety.
+        existing = list(REGISTRY._names_to_collectors.values())  # noqa: SLF001
+        for collector in existing:
             if getattr(collector, "_name", None) == _COUNTER_NAME:
                 return cast("Counter", collector)
         raise

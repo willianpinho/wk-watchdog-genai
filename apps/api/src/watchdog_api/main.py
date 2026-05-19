@@ -1,8 +1,9 @@
 """FastAPI app factory + lifespan for wk-watchdog.
 
 The factory pattern (vs a module-level `app = FastAPI(...)`) is
-required so tests can inject a `Settings` with a temp DB path and
-get a fully-wired app per test, without monkeypatching globals.
+required so tests can inject a `Settings` with a temp DB path AND a
+custom `SpanProcessor` (in-memory exporter) without monkeypatching
+globals.
 
 Lifespan responsibilities
 -------------------------
@@ -11,32 +12,41 @@ Lifespan responsibilities
    check).
 2. If `settings.webhook_target_url` is set, start the
    `OutboxWorker` as a background asyncio task and cancel it
-   cleanly on shutdown. An empty `webhook_target_url` means we are
-   running without delivery wired up (e.g., in a route-only test
-   or a demo); the worker is then NOT started.
+   cleanly on shutdown.
+
+Observability is wired at app-construction time (`create_app`), not
+lifespan, because `FastAPIInstrumentor.instrument_app` must run before
+the first request reaches the router stack.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 import aiosqlite
+import structlog
 from fastapi import FastAPI
 
 from watchdog_api import __version__
 from watchdog_api.config import Settings, load_settings
+from watchdog_api.observability.logging import configure_logging
+from watchdog_api.observability.otel import configure_otel
 from watchdog_api.routes.health import router as health_router
 from watchdog_api.routes.ingestion import router as ingestion_router
+from watchdog_api.routes.metrics import router as metrics_router
 from watchdog_api.routes.sink import router as sink_router
 from watchdog_core.alerting.outbox_worker import OutboxWorker
 from watchdog_core.alerting.webhook_dispatcher import WebhookDispatcher
 from watchdog_core.persistence.migrations import apply_migrations
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from opentelemetry.sdk.trace import SpanProcessor
+
+logger = structlog.get_logger(__name__)
 
 
 @asynccontextmanager
@@ -60,7 +70,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             poll_interval_seconds=settings.worker_poll_interval_seconds,
         )
         worker_task = asyncio.create_task(worker.run(), name="outbox-worker")
-        logger.info("outbox worker started; target=%s", settings.webhook_target_url)
+        logger.info("outbox-worker-started", target=settings.webhook_target_url)
 
     try:
         yield
@@ -73,9 +83,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             await dispatcher.aclose()
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    """Build a fresh FastAPI app wired to `settings`."""
+def create_app(
+    settings: Settings | None = None,
+    *,
+    span_processor: SpanProcessor | None = None,
+) -> FastAPI:
+    """Build a fresh FastAPI app wired to `settings`.
+
+    Tests pass `span_processor=SimpleSpanProcessor(InMemorySpanExporter(...))`
+    to capture spans without hitting an OTLP endpoint.
+    """
     resolved = settings or load_settings()
+    configure_logging(env=resolved.env, log_level=resolved.log_level)
+
     app = FastAPI(
         title="wk-watchdog API",
         version=__version__,
@@ -85,4 +105,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(ingestion_router)
     app.include_router(sink_router)
+    app.include_router(metrics_router)
+
+    if resolved.otel_enabled:
+        configure_otel(resolved, app, span_processor=span_processor)
+
     return app

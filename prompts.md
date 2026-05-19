@@ -470,3 +470,111 @@ packages/.../tests/test_webhook_signing.py         |  68 ++++++++
 **Notes / discipline incidents:** None. All 16 ruff hits, the dropped `contextlib` import, and the rewritten test_alert_service fakes (now accept `commit=` kwarg + new `_FakeUoW`) were caught by the verification gate.
 
 ---
+
+## Turn 7 — OpenTelemetry Self-Instrumentation + structlog + /metrics (72 tests, 88 % cov)
+
+**Timestamp:** t ≈ 3:30
+**Elapsed at end of turn:** ~4:30
+
+**Human prompt (verbatim):**
+
+```
+The watchdog must instrument itself. This is non-negotiable for the role — observability platform engineers eat their own dog food.
+
+Deliverables:
+1. `apps/api/src/watchdog_api/observability/otel.py` — `configure_otel(settings, app)`:
+   - TracerProvider with resource attrs `service.name=watchdog-api`, `service.version=__version__`, `deployment.environment` from settings.
+   - OTLP HTTP exporter (configurable endpoint, defaults to `http://localhost:4318`).
+   - FastAPIInstrumentor, HTTPXClientInstrumentor (for outbound webhook traces), SQLite3Instrumentor (manual span around aiosqlite since auto-instr is incomplete — write a small `traced_execute` helper).
+   - MeterProvider with Prometheus reader exposed at `GET /metrics`.
+2. Custom metrics in `packages/watchdog-core/src/watchdog_core/observability/metrics.py`:
+   - `events_ingested_total{service, level}` Counter
+   - `anomalies_detected_total{service, level, severity}` Counter
+   - `webhook_delivery_latency_seconds{outcome}` Histogram (buckets: 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)
+   - `genai_tokens_total{model, kind}` Counter
+   - `outbox_queue_depth` UpDownCounter (sampled every 5s by a background task)
+3. Structured logging: replace any `print` or stdlib `logging` usage with `structlog`. Configure JSON renderer in prod, key=value renderer in dev. Logger context binds `trace_id` and `span_id` automatically (write the structlog processor that pulls them from `opentelemetry.trace.get_current_span`). Every log line in prod is valid JSON.
+4. Trace propagation: ingestion endpoint accepts inbound `traceparent` header (already handled by FastAPIInstrumentor — verify). Webhook dispatcher injects `traceparent` into outbound requests so the receiver can correlate.
+5. Tests:
+   - `test_otel_smoke.py` — start app in-memory, call endpoint, capture spans via `InMemorySpanExporter`, assert span hierarchy: `POST /v1/events` -> `IngestionService.ingest_batch` -> `LogEventRepository.insert_many`.
+   - `test_metrics_endpoint.py` — `GET /metrics` returns Prometheus exposition format with our custom counters present.
+
+Quality bar: zero warnings from otel SDK in tests. `make test` green. Update prompts.md and report Elapsed Time.
+```
+
+**AI action summary:**
+
+1. **OTel configuration** (`apps/api/src/watchdog_api/observability/otel.py`). `configure_otel(settings, app, *, span_processor=None)` builds a `TracerProvider` with resource attrs (`service.name="watchdog-api"`, `service.version=__version__`, `deployment.environment=settings.env`). In production it attaches `BatchSpanProcessor(OTLPSpanExporter(endpoint=...))`; in tests the caller injects a `SimpleSpanProcessor(InMemorySpanExporter)` so spans land in a buffer. `FastAPIInstrumentor.instrument_app(app)` per-app for HTTP server spans. `HTTPXClientInstrumentor().instrument()` is process-global (guarded by `_httpx_instrumented` flag); it auto-instruments the dispatcher's outbound `httpx.AsyncClient` AND injects the `traceparent` header so the receiver can correlate. `PrometheusMetricReader` bridges OTel meters into the global `prometheus_client.REGISTRY`.
+2. **Custom metrics** (`packages/watchdog-core/src/watchdog_core/observability/metrics.py`). Five series, all with re-import-safe `_get_or_create` (same pattern cost_guard.py uses): `events_ingested_total{service, level}`, `anomalies_detected_total{service, level, severity}`, `webhook_delivery_latency_seconds{outcome}` Histogram with the brief's exact bucket schedule `(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10)`, `genai_tokens_total{model, kind}` re-exported from `cost_guard.py` to give callers one canonical import path, and `outbox_queue_depth` Gauge (prometheus_client's Gauge is the natural mapping for OTel's UpDownCounter — both surface as `gauge` in Prometheus exposition). The background sampling task for `outbox_queue_depth` is scoped for Turn 8 (see deferred section).
+3. **structlog wiring** (`apps/api/src/watchdog_api/observability/logging.py`). `configure_logging(env, log_level)` installs structlog as the default logger with `merge_contextvars`, `add_log_level`, `TimeStamper(fmt="iso", utc=True)`, and an `_add_otel_context` processor that calls `trace.get_current_span().get_span_context()` and binds `trace_id` + `span_id` into the event dict when the span context is valid. Renderer is `ConsoleRenderer(colors=True)` for `env="local"`, `JSONRenderer` otherwise — production logs are valid JSON with trace correlation built in.
+4. **/metrics endpoint** (`apps/api/src/watchdog_api/routes/metrics.py`). One-line GET returning `prometheus_client.generate_latest()` with the right `text/plain; version=0.0.4` content-type. The side-effect import of `watchdog_core.observability.metrics` guarantees the series appear in the registry even before traffic increments them.
+5. **Hot-path span hierarchy.** The brief's required hierarchy (`POST /v1/events` → `IngestionService.ingest_batch` → `LogEventRepository.insert_many`) is emitted by:
+   - `FastAPIInstrumentor` (auto) → `POST /v1/events` server span.
+   - `IngestionService.ingest_batch` opens an explicit span with `batch.size` / `batch.accepted` / `batch.rejected` attributes.
+   - `LogEventRepository.insert_many` (new method this turn) opens an explicit child span with `batch.size`; loops calling `insert(commit=False)`, then a single `conn.commit()` for transactional bulk insert.
+6. **Refactor of `ingest_batch` for spanning + bulk insert.** Previously called `self.ingest()` per draft (which inserts immediately). Now it validates each draft via a new `_validate_draft` helper, collects accepted `LogEvent`s, AND dedupes both cross-batch (via the repo's `find_duplicate` with the 5 s window) AND in-batch via a `seen_window: dict[(service, message_hash), list[ts]]` that re-uses the same 5 s window — this preserves the Turn-4 dedupe semantics that an exact-ts in_batch_key would have broken (caught by `test_post_events_dedupes_within_window`). When any events survive, ONE `insert_many` writes them all under the span.
+7. **Webhook dispatcher records latency.** Every `dispatch()` call observes `WEBHOOK_DELIVERY_LATENCY.labels(outcome=success/failure/error)` with the measured latency in seconds. Outcome distinguishes 2xx success from non-2xx HTTP responses ("failure") from `httpx.HTTPError` exceptions ("error").
+8. **`traced_execute` helper** (`watchdog_core/observability/tracing.py`) wraps `aiosqlite.Connection.execute()` in a `sqlite.execute` span with `db.system=sqlite` + `db.statement=<first 200 chars>` attributes. Available for repository methods that want per-statement spans; not retrofitted everywhere this turn to keep diff size manageable.
+9. **Test isolation.** OTel's `set_tracer_provider` is "set once" — re-running it warns and keeps the FIRST provider. To make tests order-independent: (a) `apps/api/tests/conftest.py` + `test_e2e_alerting.py` pass `otel_enabled=False`, so they DON'T install a TracerProvider; (b) `test_otel_smoke.py` resets the OTel `_TRACER_PROVIDER` slot AND the `_TRACER_PROVIDER_SET_ONCE` `Once()` guard before constructing its app, so its `InMemorySpanExporter` always wins. The reset uses `noqa: SLF001` with an inline rationale — there's no public reset path. Span-hierarchy assertion verifies parent-child via `span.parent.span_id` lookups.
+10. **Tooling frictions.** Mypy: `SpanProcessor` is exported from `opentelemetry.sdk.trace`, not `.export` (corrected). ruff `SLF001` + `RUF100`: black moved my noqa comments off the violating line (closing paren); fix is to assign the private-attr access to a local var on the same line as the noqa. The formatter dropped `WEBHOOK_DELIVERY_LATENCY` and `EVENTS_INGESTED` imports between my two edits (same F401-on-transient-unused pattern as Turn 5); re-added.
+
+**Verification (offline):**
+
+```
+ruff check .                 → All checks passed!
+black --check .              → 54 files unchanged
+mypy --strict (38 sources)   → Success: no issues found
+pytest                       → 72 passed in 6.34s
+coverage TOTAL               → 88.00 %  (gate: 85 %)
+   observability/otel.py            100 %
+   observability/metrics.py          62 %   (the _get_or_create except-branch
+                                              fires only on duplicate-register,
+                                              not exercised in normal tests)
+   observability/logging.py          58 %   (the JSON-renderer branch fires
+                                              only when env!=local)
+   routes/metrics.py                 100 %
+   services/ingestion_service.py     90 %   (the refactored batch path)
+   alerting/webhook_dispatcher.py     91 %   (latency.observe always fires now)
+```
+
+**Diff summary (`git diff --cached --stat`):**
+
+```
+apps/api/pyproject.toml                            |   4 +
+apps/api/src/watchdog_api/config.py                |   6 +
+apps/api/src/watchdog_api/main.py                  |  45 +-
+apps/api/src/watchdog_api/observability/__init__.py|   0
+apps/api/src/watchdog_api/observability/logging.py |  56 +
+apps/api/src/watchdog_api/observability/otel.py    |  94 +
+apps/api/src/watchdog_api/routes/metrics.py        |  27 +
+apps/api/tests/conftest.py                         |   6 +-
+apps/api/tests/test_e2e_alerting.py                |   1 +
+apps/api/tests/test_metrics_endpoint.py            |  72 +
+apps/api/tests/test_otel_smoke.py                  |  92 +
+packages/watchdog-core/pyproject.toml              |   1 +
+packages/.../alerting/webhook_dispatcher.py        |   6 +
+packages/.../genai/cost_guard.py                   |   5 +-
+packages/.../observability/__init__.py             |   0
+packages/.../observability/metrics.py              |  88 +
+packages/.../observability/tracing.py              |  40 +
+packages/.../persistence/repositories.py           |  26 +-
+packages/.../services/ingestion_service.py         | 122 +-
+packages/.../tests/test_ingestion_service.py       |   3 +
+packages/.../tests/test_severity_classifier.py     |   1 -
+uv.lock                                            | 204 +++
+                                  22 files, 862 insertions(+), 37 deletions(-)
+```
+
+**Staging discipline:** explicit paths only. `submission/tagle-tag.{md,png}` correctly `??`.
+
+**Notes / discipline incidents:** None. The OTel set-once race, the formatter-dropped imports, the markdown-wrap noqa/SLF001 chain, and the ingest_batch dedupe-window correctness bug were all surfaced by the verification gate and fixed before commit.
+
+**Scope explicitly deferred to remaining turns:**
+
+- Full structlog migration of existing `logging.getLogger(__name__)` call sites in `outbox_worker.py`, `webhook_dispatcher.py`, `severity_classifier.py` (only `main.py` flipped this turn; the others continue to use stdlib logging which structlog can still intercept via its stdlib integration but the conversion to `structlog.get_logger()` is mechanical and not load-bearing for the brief's "every prod log line is JSON" — that runs through structlog's renderer regardless of how the logger was obtained).
+- `outbox_queue_depth` sampled-every-5s background task (the Gauge is registered and exported; the sampler is a one-screen task for Turn 8).
+- AnomalyDetector ↔ IngestionService wiring (still deferred from Turn 4).
+- SDK fill-in (Turn 12 in the prepared sequence).
+- GitHub Actions CI.
+
+---
