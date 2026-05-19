@@ -48,9 +48,13 @@ COPY pyproject.toml uv.lock README.md ./
 COPY apps/api/pyproject.toml apps/api/pyproject.toml
 COPY packages/watchdog-core/pyproject.toml packages/watchdog-core/pyproject.toml
 COPY packages/watchdog-sdk/pyproject.toml packages/watchdog-sdk/pyproject.toml
-# ^^ README.md is referenced by every workspace member's pyproject.toml
-#    via `readme = "../../README.md"`. hatchling resolves it at editable
-#    install time, so it MUST be present inside the build context.
+COPY packages/watchdog-sdk/README.md packages/watchdog-sdk/README.md
+# ^^ hatchling reads `readme = ...` at metadata-build time, so every referenced
+#    README must exist in the build context BEFORE `uv sync` runs:
+#      - apps/api          → readme = "../../README.md"     (root)
+#      - watchdog-core     → readme = "../../README.md"     (root)
+#      - watchdog-sdk      → readme = "README.md"           (package-local;
+#                            published standalone, needs its own README on PyPI)
 
 # Now copy actual source (workspace members need them present for editable install).
 COPY apps/api/src apps/api/src
@@ -78,7 +82,11 @@ LABEL org.opencontainers.image.title="wk-watchdog" \
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
-    WATCHDOG_DB_URL="sqlite+aiosqlite:///data/watchdog.sqlite"
+    WATCHDOG_DB_URL="sqlite+aiosqlite:////data/watchdog.sqlite"
+# ^^ FOUR slashes after the scheme — the URL parser strips the 3-slash prefix,
+#    so the remaining path must keep a leading `/` to land at absolute `/data/`
+#    (the chowned VOLUME below). Three slashes resolves to `data/` (relative
+#    to WORKDIR `/app`), which the non-root user can't write to.
 
 # tini handles PID-1 signal forwarding (uvicorn → graceful shutdown on SIGTERM).
 # ca-certificates lets us reach Anthropic / OTLP TLS endpoints.
@@ -113,5 +121,8 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
           sys.exit(0 if r.status == 200 else 1)"]
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["uvicorn", "watchdog_api.main:create_app", "--factory", \
+# Invoke uvicorn as a module — bypasses the venv-script shebang, which still
+# points at the builder-stage path (`#!/build/.venv/bin/python`) after the
+# /build → /app venv relocation. `python -m` uses the runtime PATH directly.
+CMD ["python", "-m", "uvicorn", "watchdog_api.main:create_app", "--factory", \
      "--host", "0.0.0.0", "--port", "8000", "--no-server-header"]

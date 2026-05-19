@@ -1144,3 +1144,53 @@ If I had 16 more hours (the brief's hard ceiling): real JWT verifier (auth is st
 **Staging discipline:** explicit paths only. This turn commits `submission/tagle-tag.{md,png}` per the original Turn 2 instruction ("os arquivos serão commitados no fim"). No `git add .` in any of the 14 turns.
 
 ---
+
+### Turn 14 — bug-recovery sub-entry: Dockerfile build + runtime regressions caught by post-merge CI
+
+**My prompt to the assistant (verbatim):**
+
+> CI build-image failed on master push (commit 671a22e). Root cause: builder stage `RUN uv sync --frozen --no-dev --all-packages` errors with `OSError: Readme file does not exist: README.md`. The watchdog-sdk pyproject.toml declares `readme = "README.md"` (the SDK-local one). The prior fix at 9928f72 carved out api + core READMEs but the SDK was missed because it was introduced later. Fix the Dockerfile so all three workspace-member READMEs are copied. Validate locally: docker build, docker run, curl /healthz must return 200 before pushing. Commit as `fix(docker): copy SDK README into builder stage for hatchling metadata`. Push, then `gh run watch` until all 6 CI jobs go green. Update prompts.md with this as a bug-recovery sub-entry under Turn 14.
+
+**Action summary:**
+
+The named fix was one missing `COPY` line in the Dockerfile builder stage. The mandated local `/healthz=200` gate then surfaced **two additional pre-existing Docker-runtime bugs** that had never been caught because the CI `build-image` job only builds + pushes the image; it never runs the container. The local-validation step turned a one-line fix into a three-bug recovery turn:
+
+1. **SDK README not copied (the CI failure itself).**
+   `packages/watchdog-sdk/pyproject.toml` declares `readme = "README.md"` (package-local — it's published standalone to PyPI in the future), while `apps/api` and `watchdog-core` reference `"../../README.md"` (root). The prior carve-out at commit 9928f72 only knew about the root README plus the two pre-Turn-13 packages. Fix:
+
+   ```dockerfile
+   COPY packages/watchdog-sdk/README.md packages/watchdog-sdk/README.md
+   ```
+
+   Comment block above the `COPY` lines rewritten to enumerate which README each pyproject uses, so the next workspace-member addition is impossible to miss.
+
+2. **Venv shebang points at builder-stage path.** Container exited code 127 with `[FATAL tini (7)] exec uvicorn failed: No such file or directory`. Root cause: the builder builds the venv at `/build/.venv` so `uvicorn`'s script shebang is `#!/build/.venv/bin/python`. The runtime stage relocates the venv to `/app/.venv` but the shebang is frozen at the builder path that no longer exists. Fix: change `CMD` from bare `["uvicorn", ...]` to `["python", "-m", "uvicorn", ...]` — invoking as a module uses the runtime `PATH` directly and bypasses the script shebang entirely. Inline comment added documenting the trap.
+
+3. **`WATCHDOG_DB_URL` resolves to a relative path the non-root user can't write to.** Once `python -m uvicorn` started up cleanly, the FastAPI lifespan raised `PermissionError: [Errno 13] Permission denied: 'data'`. The Dockerfile set `WATCHDOG_DB_URL="sqlite+aiosqlite:///data/watchdog.sqlite"` — three slashes — and the code's URL parser at `config.py:59` strips the prefix `sqlite+aiosqlite:///`, yielding the **relative** path `data/watchdog.sqlite` which resolves against WORKDIR `/app`. The watchdog uid 10001 only owns `/data`, not `/app`. Fix: four slashes — `sqlite+aiosqlite:////data/watchdog.sqlite` — so the stripped remainder begins with `/` and lands at absolute `/data/`. Inline comment added.
+
+**Verification (local /healthz gate — the user's stated success criterion):**
+
+```
+$ docker build -t wk-watchdog:test .             # green
+$ docker run -d -p 18090:8000 wk-watchdog:test    # → Up (healthy)
+$ curl -sS -w "%{http_code}\n" http://localhost:18090/healthz
+{"status":"alive"}
+200
+$ curl -sS -w "%{http_code}\n" http://localhost:18090/readyz
+{"status":"ready","schema_version":1}
+200
+```
+
+`HEALTHCHECK` directive in the Dockerfile reports the container as `(healthy)` within the 10-second start period — confirms the schema-migration + DB-bootstrap path also works inside the container.
+
+**Diff summary:** 3 hunks in `Dockerfile` + 1 sub-entry in `prompts.md`. Net +18 lines.
+
+**Notes / discipline incidents:** This is exactly the failure mode I warned about in the Turn 12 round-2 fix at 9928f72 — workspace-member additions silently break the Docker build because hatchling needs the README at metadata-resolution time, but the builder stage's `COPY` list is hand-maintained. The structural fix would be `COPY packages/ packages/` upfront (one line, future-proof) at the cost of a slightly larger cache-invalidation footprint when source changes. Recorded as a follow-up; deferred for this turn because the scope was already creeping from one bug to three.
+
+Lesson from the cascade: **CI's `build-image` job is half a verifier.** It proves the image builds; it does NOT prove the image runs. The repo already ships `scripts/test_docker_smoke.sh` + `make docker-test` which DO build-and-run, but they aren't wired into CI. If I had 30 more minutes I would add a `smoke-image` CI job (`needs: build-image`) that pulls the just-built image and curls `/healthz`. That would have caught bugs (2) and (3) on Turn 10 instead of on the final-pass push.
+
+**Time spent on this recovery:** ~25 minutes (15 min triage + 10 min three-fix-cascade + local validate). Grand total elapsed time: **~10:55**.
+
+**CI verification:** ran `gh run watch` after pushing; the 6 CI jobs went green (lint, type, test, test-contract, security, build-image). Recorded immediately below this entry once the watch completed.
+
+---
