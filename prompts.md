@@ -1036,3 +1036,53 @@ packages/watchdog-core/src/watchdog_core/domain/models.py | + ts string-only val
 **Notes / discipline incidents:** Formatter-dropped-imports recurred (same Turn 5/7/8 pattern), caught by the verification gate and recovered in-line. The 3-step ladder of schemathesis failures (declare missing codes → fix content-type override → fix Pydantic coercion) is the kind of contract debugging where each fix surfaces the next layer — exactly what the schemathesis CLI is for. No prod regression at any point.
 
 ---
+
+## Turn 13 — `watchdog-sdk` extraction: real Python SDK (98 tests, watchdog_core 90.04 %)
+
+**Timestamp:** t ≈ 8:30 · **Elapsed at end:** ~9:30
+
+**Human prompt:** Extract `watchdog-sdk` as a real Python SDK package — sync + async clients, retry policy, drop-in `logging` integration, runnable quickstart, packaged for PyPI publish. The kickoff brief's identified Senior differentiator.
+
+**AI action summary:**
+
+1. **`retries.py`** — pure jittered-backoff calculator. `RetryPolicy(max_retries, backoff_base, backoff_factor, backoff_max, jitter, retryable_status)` frozen dataclass; `should_retry(status, attempt)` + `delay_for(attempt, retry_after_header)`. `Retry-After` accepts seconds AND HTTP-date, clamped to `backoff_max`. Jitter pinnable for tests via `random.uniform`.
+2. **`client.py`** — `WatchdogClient` (sync, httpx.Client) + `AsyncWatchdogClient` (async, httpx.AsyncClient) sharing `_build_headers`/`_serialize_batch`/`_parse_ack`/`RetryPolicy`. Public `EventAck` + `Rejection` frozen dataclasses with `EventAck.all_accepted` convenience. Both expose `__enter__`/`__aenter__` returning `typing.Self` (PYI034). `stream_alerts()` is a deliberate `NotImplementedError` per the brief; TODO.md tracks the server-side SSE backlog.
+3. **`models.py`** — explicit re-export of `watchdog_core.domain` with `LogEventInput = LogEventDraft` alias. Docstring records the one-way invariant: SDK → core; **SDK NEVER imports from `watchdog_api`** (mechanically asserted by `test_sdk_does_not_import_watchdog_api`).
+4. **`instrumentation.py` — the killer feature.** `WatchdogHandler(logging.Handler)` with size + interval batching, `threading.Lock`-protected mutate path, background flush thread every `flush_interval_s`, `atexit` hook so the last batch isn't lost. `_record_to_event` maps `LogRecord.created` → tz-aware datetime; `logging.WARNING → "WARN"` alias; stuffs `logger / module / function / line` into `attributes`. Handler default `level=logging.NOTSET` — stdlib convention (logger filters, handler accepts). `instrument_logging(logger, client, service)` convenience binder.
+5. **`pyproject.toml`** — `description`, 6 `keywords`, 11 PyPI `classifiers` (incl. `Typing :: Typed`), `project.urls` (Homepage/Repo/Issues/Documentation), `project.optional-dependencies = {"otel": ["opentelemetry-sdk>=1.27"]}`, `[tool.hatch.build.targets.sdist]` block.
+6. **README** ships a real install / quickstart (sync + async + drop-in logging), retry-semantics table, observability note (auto-traceparent if otel extra installed), AND the mandatory "Why not `logging.handlers.HTTPHandler`?" 5-row comparison (batching, retry, encoding, error handling, trace correlation). Plus a `TODO.md` with 5 prioritised backlog items (SSE server endpoint, `enable_otel_propagation` helper, lean-SDK refactor, idempotency-key header, sync stream_alerts).
+7. **`examples/quickstart.py`** — runnable script against the demo stack; 60 INFO baseline + 50 ERROR burst so the detector reliably fires; exercises `send_event`, `send_batch`, AND `instrument_logging`.
+8. **Three tests, all green:**
+   - `test_client_retries.py` (6 cases): respx 503/503/200 + jitter-pinned to 0 → `route.call_count == 3 and ack.accepted == 1`; exhaustion → `raise_for_status`; `delay_for` exact schedule; `Retry-After` seconds + clamped HTTP-date; malformed `Retry-After` falls back to backoff; `should_retry` matrix.
+   - `test_instrument_logging.py` (4 cases): `_FakeClient` records batches; size-trigger flush; explicit-flush; level-name mapping including `WARNING → WARN`; `@pytest.mark.slow` background-flush-thread.
+   - `test_sdk_type_safety.py` (2 cases): `subprocess.run(["uv", "run", "mypy", "--strict", SDK_SRC])` standalone mypy gate; AND a static `watchdog_api` grep that mechanically enforces the SDK→api invariant.
+9. **Wheel + sdist build clean.** `uv build packages/watchdog-sdk` produces `watchdog_sdk-0.1.0-py3-none-any.whl` (12 KB) and `watchdog_sdk-0.1.0.tar.gz` (12 KB).
+
+**Tooling frictions — the worst formatter-race so far.**
+
+The PostToolUse formatter wiped the SDK `__init__.py` down to the bare `__version__ = "0.1.0"` not once but twice between my Write calls, despite the `**/__init__.py = ["F401"]` per-file ignore in pyproject. **Structural resolution:** switched the `__init__.py` to the **PEP 484 explicit re-export** pattern (`from watchdog_sdk.client import WatchdogClient as WatchdogClient`) — the `as <SAME_NAME>` alias is recognised by ALL Python tooling (mypy, pyright, ruff, autoflake) as a deliberate re-export, NOT dead code. Survives any formatter pass. The `from watchdog_sdk import __version__` circular import in `client.py` was broken with a dedicated `_version.py` leaf module.
+
+Other resolved frictions: PLR0913 on both client `__init__` (noqa with "DI seam" rationale); PYI034 on `__enter__`/`__aenter__` (typing.Self); RET504 on `_build_headers` (inlined); SIM105/S110 on `_on_atexit` (`contextlib.suppress`); S311 on `retries.py` jitter (per-file ignore — not crypto); T201 in examples (per-file ignore); S603/S607 on the subprocess test (per-file ignore — `uv` on PATH per CI environment). Plus one real test bug: handler default `level=logging.INFO` silently dropped DEBUG records; changed to `NOTSET` to match stdlib convention.
+
+**Verification:**
+
+```
+ruff check .                  → All checks passed!
+black --check .               → 76 files unchanged
+mypy --strict (46 sources)    → 0 issues
+pytest                        → 98 passed, 2 deselected, 30 warnings in 6.07s
+make test-core                → 90.04 % over watchdog_core  (gate 90 %)
+make test-api                 → 87.62 % over watchdog_api   (gate 80 %)
+uv build packages/watchdog-sdk → watchdog_sdk-0.1.0 .whl + .tar.gz, 12 KB each
+schemathesis                  → unchanged from Turn 12: zero failures
+```
+
+**Diff summary:** `16 files, 1233 insertions(+), 3 deletions(-)` — entirely under `packages/watchdog-sdk/` plus a small per-file-ignore block in root `pyproject.toml`.
+
+**Public SDK surface (PEP 484 re-exports):** `WatchdogClient`, `AsyncWatchdogClient`, `LogEventInput`, `LogEvent`, `Alert`, `AnomalyWindow`, `LogLevel`, `AlertSeverity`, `WebhookStatus`, `RetryPolicy`, `EventAck`, `Rejection`, `WatchdogHandler`, `instrument_logging`, `__version__`.
+
+**Staging discipline:** explicit paths only. `submission/tagle-tag.{md,png}` correctly untracked.
+
+**Notes / discipline incidents:** The formatter-strip-imports race surfaced its worst form on `__init__.py`; resolved structurally via the PEP 484 `as Name` re-export pattern (not a noqa workaround). Lesson: when an aggressive formatter wins repeatedly against per-file ignores, the right move is to change the SHAPE so the code is unambiguously alive — not to add another suppressor.
+
+---

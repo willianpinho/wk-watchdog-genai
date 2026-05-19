@@ -1,16 +1,46 @@
 [project]
 name = "watchdog-sdk"
 version = "0.1.0"
-description = "wk-watchdog Python client SDK (Turn 12 — placeholder)"
-readme = "../../README.md"
+description = "Official Python client for the wk-watchdog Observability & Event API."
+readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Willian Pinho", email = "willianpinho@gmail.com" }]
 license = { text = "MIT" }
+keywords = [
+  "observability",
+  "logging",
+  "anomaly-detection",
+  "sdk",
+  "watchdog",
+  "opentelemetry",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: System :: Logging",
+  "Topic :: System :: Monitoring",
+  "Typing :: Typed",
+]
 dependencies = [
   "watchdog-core",
   "httpx>=0.27",
   "pydantic>=2.9",
 ]
+
+[project.optional-dependencies]
+otel = ["opentelemetry-sdk>=1.27"]
+
+[project.urls]
+Homepage = "https://github.com/willianpinho/wk-watchdog-genai"
+Repository = "https://github.com/willianpinho/wk-watchdog-genai"
+Issues = "https://github.com/willianpinho/wk-watchdog-genai/issues"
+Documentation = "https://github.com/willianpinho/wk-watchdog-genai/blob/master/packages/watchdog-sdk/README.md"
 
 [build-system]
 requires = ["hatchling"]
@@ -18,3 +48,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/watchdog_sdk"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/watchdog_sdk",
+  "examples",
+  "README.md",
+  "TODO.md",
+  "pyproject.toml",
+]

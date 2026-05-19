@@ -111,6 +111,21 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel"]
   "PLR2004", # CLI tools use small inline constants for clarity
   "D",       # CLI tools don't need docstrings on every function
 ]
+"packages/watchdog-sdk/src/watchdog_sdk/retries.py" = [
+  "S311",  # jittered exponential backoff uses `random.uniform`; this is
+           # standard retry-policy practice, NOT a security context.
+]
+"packages/watchdog-sdk/examples/**/*.py" = [
+  "INP001",  # examples/ is runnable scripts, not a package
+  "T201",    # print() is the right tool in a quickstart
+  "D",       # examples are read top-to-bottom; per-function docstrings
+             # would add noise without value
+]
+"packages/watchdog-sdk/tests/test_sdk_type_safety.py" = [
+  "S603",    # subprocess input is a static list of literals — no injection
+  "S607",    # `uv` is the documented runtime entry; an absolute path would
+             # make the test platform-specific (CI uses different layouts)
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
