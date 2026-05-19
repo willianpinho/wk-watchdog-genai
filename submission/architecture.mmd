@@ -1,0 +1,10 @@
+flowchart LR
+    SDK[watchdog-sdk] --> IN[POST /v1/events]
+    IN --> ING[IngestionService]
+    ING --> DET[AnomalyDetector<br/>EWMA + Welford]
+    DET --> CLS[SeverityClassifier<br/>Anthropic tool_use]
+    CLS --> ALS[AlertService<br/>atomic write]
+    ALS --> OBX[(webhook_outbox)]
+    OBX --> WK[OutboxWorker]
+    WK --> WHD[WebhookDispatcher<br/>HMAC sign]
+    WHD --> SINK[External receiver]

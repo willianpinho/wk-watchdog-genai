@@ -36,17 +36,7 @@ schema-enforced LLM output and a transactional outbox for delivery.
 
 # Solution at a glance
 
-```mermaid
-flowchart LR
-    SDK[watchdog-sdk] --> IN[POST /v1/events] --> ING[IngestionService]
-    ING --> DET[AnomalyDetector<br/>EWMA + Welford]
-    DET --> CLS[SeverityClassifier<br/>Anthropic tool_use]
-    CLS --> ALS[AlertService<br/>atomic write]
-    ALS --> OBX[(webhook_outbox)]
-    OBX --> WK[OutboxWorker]
-    WK --> WHD[WebhookDispatcher<br/>HMAC sign]
-    WHD --> SINK[External receiver]
-```
+![w:100% Architecture flow](architecture.png)
 
 - **API-first.** OpenAPI 3.1, schemathesis-verified.
 - **AT-LEAST-ONCE delivery.** Outbox pattern, signed webhooks.
