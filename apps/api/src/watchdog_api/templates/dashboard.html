@@ -1,0 +1,85 @@
+{% extends "layout.html" %}
+{% block content %}
+
+<section aria-labelledby="overview-heading">
+  <h2 id="overview-heading" class="text-lg font-semibold mb-4">Overview · last 24 hours</h2>
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <article class="rounded-lg border bg-white p-4 shadow-sm">
+      <p class="text-xs uppercase text-slate-500">Events ingested</p>
+      <p class="text-3xl font-semibold mt-1">{{ summary.total_events }}</p>
+    </article>
+    <article class="rounded-lg border bg-white p-4 shadow-sm">
+      <p class="text-xs uppercase text-slate-500">Alerts by severity</p>
+      <ul class="mt-1 text-sm space-y-1">
+        {% for sev in ["critical", "high", "medium", "low"] %}
+        <li>
+          <span class="badge badge-{{ sev }}" aria-label="severity {{ sev }}">{{ sev }}</span>
+          <span class="ml-2 font-mono">{{ alerts_by_severity.get(sev, 0) }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </article>
+    <article class="rounded-lg border bg-white p-4 shadow-sm">
+      <p class="text-xs uppercase text-slate-500">Noisiest services</p>
+      {% if summary.top_services %}
+      <ol class="mt-1 text-sm space-y-1">
+        {% for service, n in summary.top_services %}
+        <li class="flex justify-between"><span>{{ service }}</span><span class="font-mono text-slate-500">{{ n }}</span></li>
+        {% endfor %}
+      </ol>
+      {% else %}
+      <p class="text-sm text-slate-400 mt-1">No events in the window.</p>
+      {% endif %}
+    </article>
+  </div>
+</section>
+
+<section aria-labelledby="rate-heading">
+  <h2 id="rate-heading" class="text-lg font-semibold mb-4">Event rate · last 60 minutes</h2>
+  <div class="rounded-lg border bg-white p-4 shadow-sm">
+    <div id="event-rate-chart" style="width:100%; min-height:240px;"
+         hx-get="/partials/event-rate"
+         hx-trigger="load, every 15s"
+         hx-target="this"
+         hx-swap="innerHTML"></div>
+    <noscript><p class="text-sm text-slate-400">Live chart requires JavaScript.</p></noscript>
+  </div>
+  <script>
+  // uPlot bootstrapper. HTMX swaps a JSON-embedded <script> into the
+  // target div; this listens for the swap and re-renders the chart.
+  (function () {
+    function render(payload) {
+      const el = document.getElementById("event-rate-chart");
+      if (!el || !window.uPlot || !payload) return;
+      el.innerHTML = "";
+      const opts = {
+        width: el.clientWidth || 800,
+        height: 240,
+        scales: { x: { time: true } },
+        series: [
+          {},
+          { label: "events/min", stroke: "#0f172a", width: 2, fill: "rgba(15,23,42,0.08)" },
+        ],
+      };
+      new window.uPlot(opts, [payload.ts, payload.counts], el);
+    }
+    document.body.addEventListener("htmx:afterSwap", function (evt) {
+      if (evt.target.id !== "event-rate-chart") return;
+      try { render(JSON.parse(evt.target.textContent)); } catch (e) { /* ignore */ }
+    });
+  })();
+  </script>
+</section>
+
+<section aria-labelledby="alerts-heading">
+  <h2 id="alerts-heading" class="text-lg font-semibold mb-4">Recent alerts</h2>
+  <div id="alerts-list"
+       hx-get="/partials/alerts"
+       hx-trigger="load, every 30s"
+       hx-target="this"
+       hx-swap="innerHTML">
+    <p class="text-sm text-slate-400">Loading recent alerts…</p>
+  </div>
+</section>
+
+{% endblock %}

@@ -1,0 +1,59 @@
+{% extends "layout.html" %}
+{% block title %}Alert {{ alert.id }} · wk-watchdog{% endblock %}
+
+{% block content %}
+<nav class="text-sm text-slate-500"><a href="/" class="hover:underline">← back to dashboard</a></nav>
+
+<article aria-labelledby="alert-heading" class="rounded-lg border bg-white p-6 shadow-sm">
+  <header class="flex items-start justify-between gap-4">
+    <div>
+      <p class="text-xs uppercase text-slate-500">Alert</p>
+      <h2 id="alert-heading" class="text-xl font-mono break-all">{{ alert.id }}</h2>
+    </div>
+    <span class="badge badge-{{ alert.severity }}" aria-label="severity {{ alert.severity }}">{{ alert.severity }}</span>
+  </header>
+
+  <section aria-labelledby="anomaly-heading" class="mt-6">
+    <h3 id="anomaly-heading" class="text-sm font-semibold text-slate-700">Anomaly window</h3>
+    <dl class="mt-2 grid grid-cols-2 md:grid-cols-3 gap-y-2 gap-x-4 text-sm">
+      <dt class="text-slate-500">Service</dt><dd class="font-mono">{{ alert.anomaly.service }}</dd>
+      <dt class="text-slate-500">Level</dt><dd class="font-mono">{{ alert.anomaly.level }}</dd>
+      <dt class="text-slate-500">Count</dt><dd class="font-mono">{{ alert.anomaly.count }}</dd>
+      <dt class="text-slate-500">Window start</dt><dd class="font-mono">{{ alert.anomaly.window_start.isoformat() }}</dd>
+      <dt class="text-slate-500">Window end</dt><dd class="font-mono">{{ alert.anomaly.window_end.isoformat() }}</dd>
+      <dt class="text-slate-500">z-score</dt><dd class="font-mono">{{ "%.2f"|format(alert.anomaly.z_score) }}</dd>
+      <dt class="text-slate-500">Baseline mean</dt><dd class="font-mono">{{ "%.2f"|format(alert.anomaly.baseline_mean) }}</dd>
+      <dt class="text-slate-500">Baseline stddev</dt><dd class="font-mono">{{ "%.2f"|format(alert.anomaly.baseline_stddev) }}</dd>
+      <dt class="text-slate-500">Created at</dt><dd class="font-mono">{{ alert.created_at.isoformat() }}</dd>
+    </dl>
+  </section>
+
+  <section aria-labelledby="reasoning-heading" class="mt-6">
+    <h3 id="reasoning-heading" class="text-sm font-semibold text-slate-700">LLM reasoning</h3>
+    <pre class="mt-2 text-sm bg-slate-100 p-4 rounded whitespace-pre-wrap">{{ alert.reasoning }}</pre>
+  </section>
+
+  <section aria-labelledby="webhook-heading" class="mt-6">
+    <h3 id="webhook-heading" class="text-sm font-semibold text-slate-700">Webhook delivery</h3>
+    {% if outbox_rows %}
+    <table class="mt-2 w-full text-sm">
+      <thead class="text-left text-slate-500 border-b">
+        <tr><th class="py-1">Attempts</th><th class="py-1">Last attempt</th><th class="py-1">Next attempt</th><th class="py-1">Status</th></tr>
+      </thead>
+      <tbody class="font-mono">
+      {% for row in outbox_rows %}
+        <tr class="border-b last:border-0">
+          <td class="py-1">{{ row.attempts }}</td>
+          <td class="py-1">{{ row.last_attempt_at or "—" }}</td>
+          <td class="py-1">{{ row.next_attempt_at or "—" }}</td>
+          <td class="py-1"><span class="badge badge-{{ row.status if row.status in ['critical','high','medium','low'] else 'low' }}">{{ row.status }}</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="mt-2 text-sm text-slate-400">No outbox rows recorded for this alert.</p>
+    {% endif %}
+  </section>
+</article>
+{% endblock %}

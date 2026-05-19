@@ -73,6 +73,62 @@ class LogEventRepository:
                 await self.insert(event, commit=False)
             await self._conn.commit()
 
+    async def rate_per_minute(self, *, minutes: int = 60) -> dict[str, list[int]]:
+        """Per-minute event counts for the last `minutes` minutes.
+
+        Returns uPlot-ready columnar arrays:
+            {"ts": [unix_ts, ...], "counts": [int, ...]}
+        with one entry per minute (zero-filled where no events were
+        observed) so the chart shows a continuous timeline.
+        """
+        end = datetime.now(UTC).replace(second=0, microsecond=0)
+        start = end - timedelta(minutes=minutes)
+        cursor = await self._conn.execute(
+            "SELECT strftime('%Y-%m-%dT%H:%M:00+00:00', ts) AS minute, COUNT(*) "
+            "FROM log_events WHERE ts >= ? AND ts < ? "
+            "GROUP BY minute",
+            (_iso(start), _iso(end)),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+
+        minute_to_count = {row[0]: int(row[1]) for row in rows}
+        ts_series: list[int] = []
+        count_series: list[int] = []
+        cur = start
+        while cur < end:
+            ts_series.append(int(cur.timestamp()))
+            count_series.append(minute_to_count.get(_iso(cur), 0))
+            cur += timedelta(minutes=1)
+        return {"ts": ts_series, "counts": count_series}
+
+    async def summary_last_24h(
+        self,
+        *,
+        top_n_services: int = 5,
+    ) -> dict[str, Any]:
+        """Total event count + top N noisiest services in the last 24 h."""
+        end = datetime.now(UTC)
+        start = end - timedelta(hours=24)
+
+        cur1 = await self._conn.execute(
+            "SELECT COUNT(*) FROM log_events WHERE ts >= ?",
+            (_iso(start),),
+        )
+        row = await cur1.fetchone()
+        await cur1.close()
+        total = int(row[0]) if row is not None else 0
+
+        cur2 = await self._conn.execute(
+            "SELECT service, COUNT(*) AS n FROM log_events "
+            "WHERE ts >= ? GROUP BY service ORDER BY n DESC LIMIT ?",
+            (_iso(start), top_n_services),
+        )
+        top = [(r[0], int(r[1])) for r in await cur2.fetchall()]
+        await cur2.close()
+
+        return {"total_events": total, "top_services": top}
+
     async def list_recent(self, service: str, *, limit: int = 100) -> list[LogEvent]:
         cursor = await self._conn.execute(
             "SELECT id, ts, service, level, message, attributes_json"
@@ -189,6 +245,34 @@ class AlertRepository:
         row = await cursor.fetchone()
         await cursor.close()
         return self._row_to_alert(row) if row is not None else None
+
+    async def list_recent(self, *, limit: int = 20) -> list[Alert]:
+        """Recent alerts ordered by `created_at DESC`, ANY webhook_status."""
+        cursor = await self._conn.execute(
+            "SELECT id, service, level, window_start, window_end, event_count,"
+            " baseline_mean, baseline_stddev, z_score, severity, reasoning,"
+            " created_at, dispatched_at, webhook_status"
+            " FROM alerts ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        return [self._row_to_alert(r) for r in rows]
+
+    async def count_by_severity_last_24h(self) -> dict[str, int]:
+        """{severity → count} over the last 24 h. Missing buckets default to 0."""
+        end = datetime.now(UTC)
+        start = end - timedelta(hours=24)
+        cursor = await self._conn.execute(
+            "SELECT severity, COUNT(*) FROM alerts WHERE created_at >= ? GROUP BY severity",
+            (_iso(start),),
+        )
+        rows = await cursor.fetchall()
+        await cursor.close()
+        result: dict[str, int] = {"low": 0, "medium": 0, "high": 0, "critical": 0}
+        for row in rows:
+            result[row[0]] = int(row[1])
+        return result
 
     async def list_pending(self, *, limit: int = 50) -> list[Alert]:
         cursor = await self._conn.execute(

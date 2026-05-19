@@ -1,0 +1,28 @@
+{# HTMX fragment: NO <html>/<body> wrapper. Swapped into #alerts-list. #}
+{% if alerts %}
+<ul class="divide-y rounded-lg border bg-white">
+  {% for alert in alerts %}
+  <li class="p-4">
+    <div class="flex items-center justify-between">
+      <div class="space-y-1">
+        <p class="text-sm font-mono text-slate-500">{{ alert.created_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</p>
+        <p class="text-base">
+          <a class="font-medium text-slate-900 hover:underline" href="/alerts/{{ alert.id }}">{{ alert.anomaly.service }}</a>
+          <span class="text-slate-400">·</span>
+          <span class="text-sm text-slate-500">{{ alert.anomaly.level }}</span>
+          <span class="text-slate-400">·</span>
+          <span class="text-sm text-slate-500">z={{ "%.1f"|format(alert.anomaly.z_score) }}</span>
+        </p>
+      </div>
+      <span class="badge badge-{{ alert.severity }}" aria-label="severity {{ alert.severity }}">{{ alert.severity }}</span>
+    </div>
+    <details class="mt-2">
+      <summary class="cursor-pointer text-xs text-slate-500 hover:text-slate-900">view reasoning</summary>
+      <pre class="mt-2 text-xs bg-slate-100 p-3 rounded overflow-x-auto">{{ alert.reasoning }}</pre>
+    </details>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="text-sm text-slate-400">No alerts in the recent window.</p>
+{% endif %}

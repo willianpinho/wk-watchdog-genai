@@ -25,16 +25,19 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import aiosqlite
 import structlog
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from watchdog_api import __version__
 from watchdog_api.config import Settings, load_settings
 from watchdog_api.observability.logging import configure_logging
 from watchdog_api.observability.otel import configure_otel
+from watchdog_api.routes.dashboard import router as dashboard_router
 from watchdog_api.routes.health import router as health_router
 from watchdog_api.routes.ingestion import router as ingestion_router
 from watchdog_api.routes.metrics import router as metrics_router
@@ -106,6 +109,14 @@ def create_app(
     app.include_router(ingestion_router)
     app.include_router(sink_router)
     app.include_router(metrics_router)
+    app.include_router(dashboard_router)
+
+    # Vendored static assets (uPlot + README). Production-built CSS
+    # would also live here.
+
+    static_dir = Path(__file__).resolve().parent / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     if resolved.otel_enabled:
         configure_otel(resolved, app, span_processor=span_processor)

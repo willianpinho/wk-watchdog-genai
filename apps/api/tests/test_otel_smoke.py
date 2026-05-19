@@ -15,10 +15,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import opentelemetry.trace as _otel_trace
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.util._once import Once
 
 from watchdog_api.config import Settings
 from watchdog_api.main import create_app
@@ -30,9 +32,6 @@ async def otel_client(tmp_path: Path) -> AsyncIterator[tuple[AsyncClient, InMemo
     # the first provider. We reset both the `_TRACER_PROVIDER` slot AND
     # the Once guard so our InMemorySpanExporter wins regardless of
     # which test ran before this one.
-    import opentelemetry.trace as _otel_trace
-    from opentelemetry.util._once import Once
-
     _otel_trace._TRACER_PROVIDER = None  # noqa: SLF001 — only stable reset path
     _otel_trace._TRACER_PROVIDER_SET_ONCE = Once()  # noqa: SLF001
 
@@ -70,12 +69,12 @@ async def test_span_hierarchy_post_ingest_batch_insert_many(otel_client) -> None
     span_names = {s.name for s in spans}
 
     # The brief's required hierarchy:
-    assert "IngestionService.ingest_batch" in span_names, (
-        f"missing ingest_batch span; saw {span_names}"
-    )
-    assert "LogEventRepository.insert_many" in span_names, (
-        f"missing insert_many span; saw {span_names}"
-    )
+    assert (
+        "IngestionService.ingest_batch" in span_names
+    ), f"missing ingest_batch span; saw {span_names}"
+    assert (
+        "LogEventRepository.insert_many" in span_names
+    ), f"missing insert_many span; saw {span_names}"
 
     # FastAPIInstrumentor emits a server span for the route — the exact
     # name varies across versions, so we assert the *presence* of any

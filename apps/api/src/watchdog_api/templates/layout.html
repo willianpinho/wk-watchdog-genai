@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}wk-watchdog{% endblock %}</title>
+<link rel="stylesheet" href="/static/uPlot.min.css">
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://unpkg.com/htmx.org@2.0.3"></script>
+<script defer src="/static/uPlot.iife.min.js"></script>
+<style>
+.badge { display:inline-block; padding:0.125rem 0.5rem; border-radius:9999px;
+         font-size:0.75rem; font-weight:600; text-transform:uppercase; }
+.badge-low      { background:#e2e8f0; color:#475569; }
+.badge-medium   { background:#fde68a; color:#92400e; }
+.badge-high     { background:#fdba74; color:#9a3412; }
+.badge-critical { background:#fecaca; color:#991b1b; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans">
+<header class="border-b bg-white">
+  <div class="max-w-6xl mx-auto p-4 flex items-center justify-between">
+    <a href="/" class="text-xl font-semibold">wk-watchdog</a>
+    <nav class="text-sm text-slate-500">
+      <a href="/healthz" class="hover:underline">healthz</a>
+      <span aria-hidden="true">·</span>
+      <a href="/readyz" class="hover:underline">readyz</a>
+      <span aria-hidden="true">·</span>
+      <a href="/metrics" class="hover:underline">metrics</a>
+    </nav>
+  </div>
+</header>
+<main class="max-w-6xl mx-auto p-4 space-y-8">
+{% block content %}{% endblock %}
+</main>
+<footer class="max-w-6xl mx-auto p-4 text-xs text-slate-400">
+  wk-watchdog · ops console · server-rendered (Jinja + HTMX + uPlot, no SPA build).
+</footer>
+</body>
+</html>
