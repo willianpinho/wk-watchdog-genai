@@ -44,10 +44,13 @@ WORKDIR /build
 
 # Cache layer for dependencies: copy ONLY the manifests first so a code change
 # does not invalidate the (large) dependency layer.
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 COPY apps/api/pyproject.toml apps/api/pyproject.toml
 COPY packages/watchdog-core/pyproject.toml packages/watchdog-core/pyproject.toml
 COPY packages/watchdog-sdk/pyproject.toml packages/watchdog-sdk/pyproject.toml
+# ^^ README.md is referenced by every workspace member's pyproject.toml
+#    via `readme = "../../README.md"`. hatchling resolves it at editable
+#    install time, so it MUST be present inside the build context.
 
 # Now copy actual source (workspace members need them present for editable install).
 COPY apps/api/src apps/api/src

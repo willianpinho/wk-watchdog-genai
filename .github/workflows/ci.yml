@@ -159,12 +159,14 @@ jobs:
           WATCHDOG_OTEL_ENABLED: "false"
           WATCHDOG_DB_URL: "sqlite+aiosqlite:///data/ci.sqlite"
       - name: schemathesis run --checks all
+        # schemathesis 4.x dropped the per-call `--hypothesis-deadline`
+        # flag (it was 3.x-specific). Test budget is now controlled via
+        # `--max-examples` plus the runner-level workers fan-out.
         run: |
           uv run schemathesis run \
             http://127.0.0.1:8000/openapi.json \
             --checks all \
-            --hypothesis-deadline=2000 \
-            --hypothesis-max-examples=20 \
+            --max-examples=20 \
             --workers 2
       - name: stop watchdog-api
         if: always()

@@ -6,6 +6,7 @@
 .github
 .gitignore
 *.md
+!README.md                  # workspace pyprojects reference ../../README.md
 !apps/api/src/**/*.md
 !packages/**/*.md
 LICENSE
