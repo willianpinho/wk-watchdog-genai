@@ -665,3 +665,123 @@ JS  (/static/uPlot.iife.min.js, vendored)      50 KB
 **Notes / discipline incidents:** None. PLC0415 / formatter-dropped-imports / the test-seed off-by-bucket were all surfaced by the verification gate and fixed before commit.
 
 ---
+
+## Turn 9 — Test Suite Hardening (88 tests, watchdog_core 90.27 % / watchdog_api 87.25 %)
+
+> **Discipline incident — recovered in Turn 11 (docs-only commit).** Turn 9's
+> `prompts.md` Edit failed silently with "File has been modified since read"
+> (PostToolUse formatter race between Read and Edit). The Turn 9 feat commit
+> `c4036e3` shipped without this audit entry. Turn 10's attempt to recover
+> hit the SAME race — `e62e635` also shipped without these entries. This
+> docs-only commit (Turn 11 work) appends both Turn 9 AND Turn 10 entries
+> properly. Honesty > pretending — the audit log now reflects history
+> accurately, with the failure mode documented inline.
+
+**Timestamp:** t ≈ 5:30
+**Elapsed at end of turn:** ~6:15
+
+**Human prompt (verbatim):**
+
+```
+Audit and harden the test suite. We aim for confidence, not coverage theater.
+
+Tasks:
+1. Add `pytest` markers `unit`, `integration`, `contract`, `slow`. Configure default to run unit+integration; slow gated by `-m slow`.
+2. Integration tests use `httpx.AsyncClient(ASGITransport(app))` for in-process and a separate suite using `testcontainers-python` for SQLite-on-disk (verifying WAL behavior). If testcontainers feels overkill for SQLite, justify swapping to a `tmp_path` fixture in a comment and use that. Senior decision — document the trade-off either way.
+3. Contract tests: add `schemathesis` against the OpenAPI schema. CI runs `schemathesis run --checks all --hypothesis-deadline=2000`. Skip stateful tests (overkill for MVP), keep stateless + response-conformance.
+4. Property-based tests with `hypothesis`:
+   - `LogEvent.attributes` round-trips through SQLite TEXT-as-JSON without data loss.
+   - `EWMABaseline` never produces NaN on any int sequence (regression net for numerical bugs).
+5. Test data builders: `tests/builders.py` with `make_log_event(**overrides)` and `make_anomaly(**overrides)` — no magic numbers scattered through tests. (DAMP > DRY for test code; cite Heinemeier Hansson's test naming style or Khorikov 2020.)
+6. Mutation testing smoke (optional but high signal): add `mutmut` config and document `mutmut run --paths-to-mutate packages/watchdog-core/src/watchdog_core/detection` as a manual step. Don't run in CI (too slow); just having it configured signals Senior intent.
+7. Coverage gates: per-package thresholds — `watchdog_core` >=90%, `watchdog_api` >=80%. Fail CI under threshold.
+
+Quality bar: `pytest -m "unit or integration"` runs in <30s on a laptop. Print the final test count and coverage table. Update prompts.md and report Elapsed Time.
+```
+
+**AI action summary:**
+
+1. **Marker taxonomy + auto-marking.** `[tool.pytest.ini_options].markers` registers `unit / integration / contract / slow`. `addopts` defaults to `-m 'unit or integration'`. Root `conftest.py` auto-applies `unit` by default; flips the 10-file integration set to `integration`.
+2. **testcontainers decision recorded** in `docs/TESTS.md`: SQLite has no server → zero isolation gain from containers. `tmp_path + aiosqlite.connect()` against a real file covers the on-disk path; existing `test_wal_mode_active` / `test_foreign_keys_enabled` lock in the WAL pragma assertion. Postgres-promotion path noted.
+3. **Schemathesis smoke** in `apps/api/tests/test_contract_openapi.py` (schema is OpenAPI 3.x, headline operations registered, POST /v1/events response matches `BatchIngestResponse`). Full CLI documented in `make test-contract`. `/metrics` correctly excluded via `include_in_schema=False`.
+4. **Property tests with Hypothesis** — `LogEvent.attributes` SQLite TEXT-as-JSON round-trip + `EWMABaseline.current()` always-finite invariant + long-constant-stream convergence.
+5. **Test data builders** in `packages/watchdog-core/tests/builders.py` — `make_log_event` / `make_anomaly` / `make_alert` taking every domain field as kwarg override. Docstring cites Khorikov 2020, Ch. 4.
+6. **`[tool.mutmut]` configured** to mutate `watchdog_core/detection/`; NOT run in CI; command documented in `docs/TESTS.md`.
+7. **Per-package coverage gates** (`make test-core` ≥ 90 %, `make test-api` ≥ 80 %) via `--override-ini="addopts=..."` to drop the default multi-package `--cov` source, so each gate evaluates ONLY its target package.
+8. Added `test_traced_execute.py` to close the last 0.82 % gap on watchdog_core.
+
+**Verification (offline):**
+
+```
+ruff check .                  → All checks passed!
+black --check .               → unchanged
+mypy --strict (39 sources)    → 0 issues
+pytest (default selection)    → 88 passed in 6.84s   ✓ under 30 s gate
+make test-core                → 90.27 % over watchdog_core   (gate 90 %)
+make test-api                 → 87.25 % over watchdog_api    (gate 80 %)
+```
+
+**Diff summary:** `9 files, 542 insertions(+), 12 deletions(-)`.
+
+**Commit:** `c4036e3 feat(turn-9): test-suite hardening — markers + property + builders + per-package gates (88 tests)`.
+
+**Notes / discipline incidents:** Audit entry missing from Turn-9 commit — recovered here. See the warning block at the top of this section.
+
+---
+
+## Turn 10 — Production Container Story (5-service compose, Grafana provisioned)
+
+**Timestamp:** t ≈ 6:15
+**Elapsed at end of turn:** ~7:00
+
+**Human prompt (verbatim):**
+
+```
+Production-grade container story. Multi-stage, distroless-ish, reproducible.
+
+Deliverables:
+1. `Dockerfile` — multi-stage:
+   - Stage 1 `builder`: python:3.12-slim, install uv, copy `pyproject.toml` + lockfile, `uv sync --frozen --no-dev`, copy source, `uv build` wheels.
+   - Stage 2 `runtime`: gcr.io/distroless/python3-debian12 (or python:3.12-slim if distroless trips on aiosqlite — test it; if it fails, document why and use slim with a non-root user and `tini`).
+   - Non-root user (uid 10001), read-only root filesystem with a tmpfs for `/tmp` and a volume for SQLite at `/data`.
+   - `HEALTHCHECK` hits `/readyz`.
+   - Labels: `org.opencontainers.image.source`, `image.revision`, `image.version` populated from build args.
+   - .dockerignore is exhaustive (no `.git`, `.venv`, tests in final image — keep image <150MB).
+2. `docker-compose.yml` — services: `watchdog-api` (build), `otel-collector` (contrib image, config in `docker/otelcol-config.yaml`), `jaeger` (all-in-one, exposes UI on 16686), `prometheus` (config in `docker/prometheus.yml` scraping watchdog-api `/metrics`), `grafana` (provisioned with one dashboard JSON showing event rate + alert count + p95 webhook latency). Healthchecks on all. Networks segmented (`backend` for app+db, `observability` for telemetry stack).
+3. `docker/grafana/dashboards/watchdog.json` — minimal but real: 4 panels (event rate, anomaly rate, webhook latency p95, GenAI token usage). Pre-provisioned, no clicking.
+4. `Makefile` additions: `up`, `down`, `logs`, `seed` (runs a synthetic traffic generator), `demo` (runs the full demo script — see Turn 13).
+5. Tests:
+   - `test_docker_smoke.sh` (bash, gated behind `make docker-test`) builds image, runs container, `curl /readyz`, kills it. Optional in CI to keep wall-clock down.
+
+Quality bar: `docker compose up` reaches steady state in <30s. `curl localhost:8000/healthz` returns 200. Grafana dashboard loads with the watchdog datasource pre-configured. Update prompts.md and report Elapsed Time.
+```
+
+**AI action summary:**
+
+1. **Multi-stage Dockerfile, slim-not-distroless (documented).** Stage 1 (`python:3.12-slim` + `uv 0.5.18`) does `uv sync --frozen --no-dev --all-packages`. Stage 2 copies the resulting venv + three workspace src trees into a clean `python:3.12-slim`. Header docstring explicitly rejects `gcr.io/distroless/python3-debian12` for two reasons: (a) it ships Python 3.11, but the repo uses 3.12-only API; (b) no shell means no `HEALTHCHECK CMD`. Recovery: non-root `uid=10001` + `tini` as PID 1 for graceful SIGTERM + read-only root FS + Python urllib healthcheck on `/readyz` every 10 s. OCI labels from build args.
+2. **`.dockerignore` exhaustive** — `.git`, `.venv`, all `tests/`, `_planning/`, `submission/`, `docs/`, secrets, runtime data, docker artefacts.
+3. **`docker-compose.yml`** — 5 services with healthchecks + 2 segmented networks (`backend` / `observability`). `watchdog-api` is `read_only` + `tmpfs:/tmp` + named volume at `/data`.
+4. **Grafana provisioned** — datasource + 4-panel dashboard (UID `wk-watchdog`): event ingestion rate by level, anomalies by severity, webhook p95 latency by outcome, GenAI tokens by kind. Anonymous Viewer enabled so the demo lands on the dashboard with zero clicks.
+5. **otelcol config** — OTLP HTTP+gRPC receivers → `memory_limiter` + `batch` → OTLP-to-Jaeger + debug exporter. **prometheus config** — 5 s scrape on `watchdog-api:8000/metrics`.
+6. **`scripts/seed_traffic.py`** — async httpx generator with 4 normal services + 1 `bursty-service` that goes hot for ~3 s every 60 s so the detector reliably fires for a demo.
+7. **`scripts/test_docker_smoke.sh`** — build with GIT_REV + VERSION, run on `:8001` (no collision), poll `/healthz` 30 s, verify `/readyz`, trap cleanup. Reports image size.
+8. **Makefile gains** `up / down / logs / seed / demo / docker-build / docker-test`.
+9. **Tooling.** Ruff `INP001 / T201 / S311 / PLR2004 / D` for `scripts/**/*.py` per-file-ignores with rationale ("scripts/ is a Makefile-invoked toolbox"). Tests/\*\* gets `PT018`.
+
+**Verification (offline; Docker daemon NOT exercised — `make docker-test` is a manual / CI step):**
+
+```
+ruff check .                  → All checks passed!
+black --check .               → 61 files unchanged
+mypy --strict (40 sources)    → 0 issues
+pytest                        → 88 passed in 6.64s
+coverage TOTAL                → 89.53 % (gate 80 %)
+```
+
+**Diff summary:** `15 files, 751 insertions(+), 13 deletions(-)`.
+
+**Commit:** `e62e635 feat(turn-10): production container story — multi-stage Dockerfile + 5-service compose + Grafana provisioned`.
+
+**Notes / discipline incidents:** Same `prompts.md` formatter race as Turn 9 — this entry too is recovered in the follow-up docs commit (Turn 11 work). Lesson documented inside the Turn-9 entry above.
+
+---
