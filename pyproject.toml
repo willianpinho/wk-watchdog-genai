@@ -138,12 +138,31 @@ exclude = "(^_planning/|/data/)"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-addopts = "--cov --cov-fail-under=80 --strict-markers --strict-config"
+# Default selection runs `unit` + `integration`. `slow` is opt-in
+# (`pytest -m slow`); `contract` is a separate CI step driven by
+# the schemathesis CLI — see the `test-contract` Makefile target.
+addopts = "--cov --cov-fail-under=80 --strict-markers --strict-config -m 'unit or integration'"
 testpaths = ["apps", "packages"]
 markers = [
-  "slow: tests that take >1s",
-  "integration: tests that touch real I/O",
+  "unit: fast in-process tests with no external I/O surface",
+  "integration: ASGI-app or aiosqlite file-DB tests (sub-100ms each)",
+  "contract: OpenAPI conformance via schemathesis (manual CI step)",
+  "slow: large-state-space tests (Hypothesis many-examples); opt-in via -m slow",
 ]
+
+# ----------------------------------------------------------------------------
+# Mutation testing (manual; NOT run in CI — too slow). Configured to mutate
+# the detection package because its branchy z-score / bucket logic is where
+# subtle off-by-one bugs would do the most damage. Run with:
+#   uv run mutmut run --paths-to-mutate packages/watchdog-core/src/watchdog_core/detection
+# Survivors indicate tests that don't actually constrain the code. The
+# bar is to keep survivor count under the threshold a future ADR sets.
+# ----------------------------------------------------------------------------
+
+[tool.mutmut]
+paths_to_mutate = "packages/watchdog-core/src/watchdog_core/detection/"
+runner = "uv run pytest -x -q --no-cov -m 'unit or integration'"
+tests_dir = "packages/watchdog-core/tests/"
 
 # ----------------------------------------------------------------------------
 # Coverage
