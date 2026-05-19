@@ -28,3 +28,83 @@ Lead Architect mode: ON. We are building a Python-based, API-first Intelligent O
 **Notes / discipline incidents:** None.
 
 ---
+
+## Turn 2 — ADR-001 + Full Repo Scaffold (`make all` green)
+
+**Timestamp:** t ≈ 0:05
+**Elapsed at end of turn:** ~0:25
+
+**Human prompt (verbatim):**
+
+```
+Before writing any code, output a concise architecture decision record (ADR-001) covering:
+1. Chosen runtime: Python 3.12, FastAPI, uvicorn, aiosqlite, Pydantic v2, structlog, OpenTelemetry SDK, httpx.
+2. Three-layer rule: routes (HTTP) -> services (business logic, no SQL) -> repositories (aiosqlite queries only). Justify with one paragraph citing Clean Architecture (Martin 2017) and the trade-off vs hexagonal.
+3. Why SQLite over Postgres for this challenge (zero-ops, single-writer fine for MVP, WAL mode for concurrent reads). Note the migration path to Postgres in case throughput >50 req/s.
+4. Folder layout for src-layout with `apps/api`, `packages/watchdog-core`, `packages/watchdog-sdk` (the SDK package is a Senior differentiator and will be filled in later).
+
+After the ADR, generate the full repo skeleton with these files actually written to disk:
+- pyproject.toml at the root using uv/hatch with workspace members for `apps/api`, `packages/watchdog-core`, `packages/watchdog-sdk`. Pin ruff, black, mypy (strict), pytest, pytest-asyncio, pytest-cov, httpx, respx, hypothesis. Configure mypy strict, ruff with rules ALL minus a justified ignore list, black line-length 100, pytest with asyncio_mode=auto and addopts="--cov --cov-fail-under=80 --strict-markers --strict-config".
+- .python-version (3.12)
+- .gitignore (Python + venv + .ruff_cache + .mypy_cache + .pytest_cache + coverage + .env)
+- .env.example with only placeholders (no secrets), referencing 1Password URIs in comments
+- README.md placeholder with one-paragraph mission
+- docs/adr/0001-architecture.md (the ADR you just drafted)
+- Makefile with targets: install, lint, type, test, run, fmt, all
+- apps/api/src/watchdog_api/__init__.py with `__version__`
+- packages/watchdog-core/src/watchdog_core/__init__.py
+- packages/watchdog-sdk/src/watchdog_sdk/__init__.py
+
+Quality bar: `make all` must pass with zero ruff warnings, mypy strict zero errors, and pytest reporting "no tests collected" cleanly. Print the file tree at the end. Then update prompts.md and report Elapsed Time.
+```
+
+**AI action summary:**
+
+1. **ADR-001 drafted** at `docs/adr/0001-architecture.md` — four decisions (runtime, three-layer, SQLite-vs-Postgres with migration trigger >50 req/s, src-layout uv virtual workspace). Cited Martin 2017 (Clean Architecture, Ch. 22 — Dependency Rule) for the three-layer choice and explicitly recorded the _refusal_ of full Cockburn hexagonal as a deliberate senior trade-off (defer ports until a second persistence backend is credible).
+2. **Repo skeleton materialised on disk** as 11 files:
+   - `pyproject.toml` — virtual uv workspace (no `[project]`), `[tool.uv.workspace]` with glob members, PEP 735 `[dependency-groups]` for dev deps, ruff `ALL` minus a _commented-and-justified_ ignore list (D100–D107 / D203 / D213 / COM812 / ISC001 / ANN401 / FIX002 / TD002 / TD003 / CPY001), mypy `strict = true`, black `line-length = 100`, pytest `asyncio_mode = "auto"` + `addopts = "--cov --cov-fail-under=80 --strict-markers --strict-config"` exactly per the brief, plus `[tool.coverage.run]` to give `--cov` a source target.
+   - `apps/api/pyproject.toml`, `packages/watchdog-core/pyproject.toml`, `packages/watchdog-sdk/pyproject.toml` — each a real `[project]` + `hatchling` build backend, declared runtime deps (the api pyproject pins all 9 runtime libs called for in the brief), so the workspace shape is real even though no code uses them yet.
+   - `apps/api/src/watchdog_api/__init__.py` carries `__version__ = "0.1.0"`; the core + sdk `__init__.py` also carry `__version__` for consistent introspection.
+   - `.python-version` (`3.12`), `.env.example` (placeholders + 1Password `op://` URI comments — no real secrets), `README.md` (one-paragraph mission + ADR link), `Makefile` (install / lint / type / test / run / fmt / all / clean / tree / help — `test` target tolerates pytest exit-5 cleanly during scaffold phase via `find … | grep -q .` guard).
+3. **`.gitignore` preserved** — the existing file already covered the brief's requirements (Python, venv, all tooling caches, `.env`) AND carried the discipline-mandated `_planning/` exclusion from `EXECUTION-START.md`. Overwriting risked losing that carve-out, so we left it intact and noted the choice here.
+4. **`make all` ran green on the first attempt:**
+   - `uv sync --all-packages` → 58 packages resolved, 3 workspace members installed editable.
+   - `ruff check .` → `All checks passed!`
+   - `black --check .` → 3 files unchanged.
+   - `mypy --strict` on the 3 package sources → `Success: no issues found in 3 source files`.
+   - `pytest` → `no tests collected in 0.46s` (scaffold phase, handled gracefully by the Makefile guard).
+
+**File tree at end of turn:**
+
+```
+wk-watchdog/
+├── .env.example
+├── .gitignore                                 (preserved from kickoff)
+├── .python-version
+├── Makefile
+├── README.md
+├── apps/
+│   └── api/
+│       ├── pyproject.toml
+│       └── src/watchdog_api/__init__.py
+├── docs/
+│   └── adr/
+│       └── 0001-architecture.md
+├── packages/
+│   ├── watchdog-core/
+│   │   ├── pyproject.toml
+│   │   └── src/watchdog_core/__init__.py
+│   └── watchdog-sdk/
+│       ├── pyproject.toml
+│       └── src/watchdog_sdk/__init__.py
+├── prompts.md
+├── pyproject.toml                             (uv virtual workspace root)
+├── submission/
+│   ├── tagle-tag.md
+│   └── tagle-tag.png
+└── uv.lock                                    (generated by uv sync)
+```
+
+**Notes / discipline incidents:** None. No manual file edits were made. `make all` passed first try, no debug loop needed.
+
+---
