@@ -13,6 +13,7 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from watchdog_api.dependencies import IngestionServiceDep
+from watchdog_api.schemas.errors import ErrorResponse
 from watchdog_core.domain.models import LogEventDraft
 
 router = APIRouter(prefix="/v1", tags=["events"])
@@ -44,6 +45,20 @@ class BatchIngestResponse(BaseModel):
     "/events",
     status_code=status.HTTP_202_ACCEPTED,
     response_model=BatchIngestResponse,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": ErrorResponse,
+            "description": (
+                "Malformed request body (FastAPI's default 400 path for "
+                "syntactically-invalid JSON, wrong Content-Type, etc.)."
+            ),
+        },
+        # 422 is auto-documented by FastAPI as `HTTPValidationError`
+        # whose `detail` is a list of validation errors. We deliberately
+        # do NOT override it with our `ErrorResponse(detail: str)` —
+        # the auto-shape is the truth (schemathesis catches the mismatch
+        # the moment we lie about it).
+    },
 )
 async def ingest_events(
     payload: BatchIngestRequest,

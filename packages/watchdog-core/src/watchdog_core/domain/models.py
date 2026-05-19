@@ -105,6 +105,21 @@ class LogEventDraft(BaseModel):
     message: str = Field(min_length=1, max_length=8192)
     attributes: dict[str, str] = Field(default_factory=dict)
 
+    @field_validator("ts", mode="before")
+    @classmethod
+    def _ts_string_only(cls, v: object) -> object:
+        # The OpenAPI schema declares `ts: string (date-time)`. Pydantic v2
+        # would otherwise accept int-as-epoch-seconds via lenient coercion,
+        # which makes the wire surface lie about its contract
+        # (schemathesis catches this as "API accepted schema-violating
+        # request"). We reject anything that is not a datetime or a string
+        # at the API boundary; internal LogEvent constructions keep the
+        # original `ts: datetime` field shape.
+        if isinstance(v, (datetime, str)):
+            return v
+        msg = f"ts must be an ISO 8601 string, got {type(v).__name__}"
+        raise ValueError(msg)
+
     @field_validator("ts")
     @classmethod
     def _ts_utc(cls, v: datetime) -> datetime:

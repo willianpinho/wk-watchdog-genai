@@ -48,6 +48,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from watchdog_api.dependencies import DbDep
+from watchdog_api.schemas.errors import ErrorResponse
 from watchdog_core.persistence.repositories import AlertRepository, LogEventRepository
 
 _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
@@ -98,7 +99,26 @@ async def alerts_partial(request: Request, db: DbDep) -> HTMLResponse:
     )
 
 
-@router.get("/alerts/{alert_id}", response_class=HTMLResponse)
+@router.get(
+    "/alerts/{alert_id}",
+    response_class=HTMLResponse,
+    responses={
+        # `response_class=HTMLResponse` would otherwise propagate the
+        # `text/html` content-type to ALL declared responses; the 404
+        # body is actually JSON (FastAPI's default HTTPException
+        # serialiser), so we override `content` explicitly. Without
+        # this override schemathesis reports an Undocumented
+        # Content-Type for the 404 path.
+        status.HTTP_404_NOT_FOUND: {
+            "description": "No alert exists with the given UUID.",
+            "content": {
+                "application/json": {
+                    "schema": ErrorResponse.model_json_schema(),
+                },
+            },
+        },
+    },
+)
 async def alert_detail(
     request: Request,
     alert_id: UUID,

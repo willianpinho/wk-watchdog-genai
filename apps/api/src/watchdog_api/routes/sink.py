@@ -21,12 +21,27 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 
+from watchdog_api.schemas.errors import ErrorResponse
 from watchdog_core.alerting.webhook_dispatcher import verify_signature
 
 router = APIRouter(prefix="/v1", tags=["sink"])
 
 
-@router.post("/_sink")
+@router.post(
+    "/_sink",
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": ErrorResponse,
+            "description": "Body was not valid UTF-8 JSON.",
+        },
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": ErrorResponse,
+            "description": (
+                "Missing or invalid `X-Watchdog-Signature` header — HMAC verification failed."
+            ),
+        },
+    },
+)
 async def sink_receiver(request: Request) -> dict[str, Any]:
     """Verify HMAC + record + 200, or reject with 401."""
     body = await request.body()

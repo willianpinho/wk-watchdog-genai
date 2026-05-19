@@ -950,3 +950,89 @@ prompts.md                                            | (this entry)
 **Notes / discipline incidents:** None. The Turn 9/10 lesson held — `git diff prompts.md` will verify the audit entry is staged before commit. Documented the ruff-vs-black resolution philosophy inline (surgical rewrite over architectural drop) so the next contributor understands WHY the multi-line asserts use the variable-binding shape.
 
 ---
+
+### Turn 11 — bug-recovery sub-entry: OpenAPI 4xx contract gaps
+
+> Schemathesis (CI test-contract job, kicked off by Turn 11's `ci.yml`)
+> caught three undeclared 4xx responses on the production routes plus a
+> later Pydantic-coercion gap. Recovered across two micro-fix commits;
+> the audit entry is filed here as a Turn 11 sub-entry per the human's
+> request.
+
+**Timestamp:** mid-Turn-12 (between the ruff-format fix and the final green)
+**Elapsed at end of sub-recovery:** ~8:30
+
+**Human prompt (verbatim):**
+
+```
+CI test-contract job failed. Schemathesis caught 3 OpenAPI contract gaps where routes return HTTP status codes that are not declared in the FastAPI route decorators:
+
+1. GET /alerts/{alert_id} — received 404, documented only 200 and 422. The route raises HTTPException(404) when the alert is not found, but the OpenAPI schema does not advertise 404 as a possible response.
+
+2. POST /v1/_sink — received 401, documented only 200. The route returns 401 when the HMAC signature is invalid, but the OpenAPI schema does not advertise 401.
+
+3. POST /v1/events — received 400, documented only 202 and 422. The route returns 400 when the ingestion service rejects an event for a business reason, but the OpenAPI schema does not advertise 400.
+
+Fix:
+
+a) Create a shared error response model at apps/api/src/watchdog_api/schemas/errors.py with a Pydantic v2 ErrorResponse class containing fields detail: str and optional code: str. Freeze it and forbid extras.
+
+b) For each of the three routes, add a responses= kwarg to the route decorator declaring the missing status codes, referencing the ErrorResponse model. [...]
+
+c) Confirm the schema reflects the new responses [...]
+d) Run schemathesis locally and confirm zero failures before pushing [...]
+e) Run make all and confirm green.
+f) Commit as: fix(api): document 400/401/404 responses for OpenAPI contract compliance
+g) Push and confirm CI: gh run watch --repo willianpinho/wk-watchdog-genai
+
+Update prompts.md with this fix as a Turn 11 bug-recovery sub-entry. Report Elapsed Time.
+```
+
+**AI action summary:**
+
+1. **`apps/api/src/watchdog_api/schemas/errors.py`** ships an `ErrorResponse` Pydantic v2 model (`detail: str`, optional `code: str`, frozen + extra=forbid) — the canonical shape for documented 4xx / 5xx bodies. Module docstring notes that schemathesis is the gate that keeps the shape honest.
+2. **Three routes declare their previously-undocumented codes**:
+   - `POST /v1/events` → `400` (FastAPI's malformed-body default path).
+   - `POST /v1/_sink` → `400` (non-JSON body) AND `401` (HMAC verification failed).
+   - `GET /alerts/{alert_id}` → `404` (unknown UUID).
+3. **Two surprise schemathesis failures from the first pass** — the user's recipe got us close to zero, but a couple of edge cases needed deeper fixes:
+   - **404 content-type mismatch on `/alerts/{alert_id}`.** Because the route is `response_class=HTMLResponse`, FastAPI propagated `text/html` onto ALL declared responses, including the 404 — but the actual 404 body is JSON (`HTTPException.detail`). Fix: replaced the `model=ErrorResponse` shorthand with an explicit `content={"application/json": {"schema": ErrorResponse.model_json_schema()}}` block on the 404 entry, so the OpenAPI says JSON (which is what the runtime emits). Inline comment in the route explains the trap for future authors.
+   - **422 schema shape mismatch on `/v1/events`.** I initially declared `422 → ErrorResponse` (which has `detail: str`), but FastAPI's actual validation 422 emits `{"detail": [list-of-error-objects]}` via its native `HTTPValidationError` model. Fix: **dropped the explicit 422 declaration entirely** — FastAPI auto-documents the right shape and schemathesis is happy. An inline comment makes the deliberate omission obvious: "the auto-shape is the truth (schemathesis catches the mismatch the moment we lie about it)."
+4. **One more schemathesis failure** — "API accepted schema-violating request" on `POST /v1/events` with `ts: 0`. Root cause: OpenAPI says `ts: string (date-time)` but Pydantic v2 leniently coerces `int` to epoch-seconds → the wire surface lied. Fix: added a `mode="before"` field validator on `LogEventDraft.ts` that rejects anything that isn't a `datetime` or `str` BEFORE Pydantic gets the chance to coerce. The internal `LogEvent.ts` keeps its loose datetime field since it's never constructed from wire input.
+5. **PostToolUse formatter race resurfaced** — between my "add import" Edit and my "add responses kwarg" Edit on the same file, the formatter dropped the `ErrorResponse` import as transiently unused. Caught immediately by mypy + pytest (`NameError: name 'ErrorResponse' is not defined`); re-added the imports in the two affected files (`ingestion.py`, `dashboard.py`). Same Turn 5/7/8 pattern.
+
+**Local verification (against a fresh uvicorn on `:8765`):**
+
+```
+ruff check .                  → All checks passed!
+mypy --strict (41 sources)    → 0 issues
+pytest                        → 88 passed in 6.28s
+coverage TOTAL                → 89.44 %
+schemathesis run --checks all → exit 0; 190 generated / 190 passed; 3 warnings
+                                (warnings: missing auth on /_sink — by design;
+                                 missing valid test data on /alerts/{id} — random
+                                 UUIDs don't hit existing rows; schema validation
+                                 mismatch on 2 ops — schemathesis can't introspect
+                                 some strict-mode constraints. None are failures.)
+make all                      → green
+```
+
+**Commit message (verbatim per the brief):**
+`fix(api): document 400/401/404 responses for OpenAPI contract compliance`.
+
+**Files touched:**
+
+```
+apps/api/src/watchdog_api/schemas/__init__.py          | new
+apps/api/src/watchdog_api/schemas/errors.py            | new (ErrorResponse)
+apps/api/src/watchdog_api/routes/ingestion.py          | + responses={400}
+apps/api/src/watchdog_api/routes/sink.py               | + responses={400, 401}
+apps/api/src/watchdog_api/routes/dashboard.py          | + responses={404} (JSON content)
+packages/watchdog-core/src/watchdog_core/domain/models.py | + ts string-only validator
+```
+
+**Staging discipline:** explicit paths only.
+
+**Notes / discipline incidents:** Formatter-dropped-imports recurred (same Turn 5/7/8 pattern), caught by the verification gate and recovered in-line. The 3-step ladder of schemathesis failures (declare missing codes → fix content-type override → fix Pydantic coercion) is the kind of contract debugging where each fix surfaces the next layer — exactly what the schemathesis CLI is for. No prod regression at any point.
+
+---
