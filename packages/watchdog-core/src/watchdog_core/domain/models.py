@@ -87,3 +87,25 @@ class Alert(BaseModel):
         if v is None:
             return None
         return _require_utc(v, field="dispatched_at")
+
+
+class LogEventDraft(BaseModel):
+    """Incoming event shape — no id yet (server-side generated on accept).
+
+    Used as the wire model on POST /v1/events and as the input type
+    to `IngestionService.ingest_batch`. Frozen + extra=forbid so any
+    schema drift fails loud at the API boundary.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ts: datetime
+    service: str = Field(min_length=1, max_length=128)
+    level: LogLevel
+    message: str = Field(min_length=1, max_length=8192)
+    attributes: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("ts")
+    @classmethod
+    def _ts_utc(cls, v: datetime) -> datetime:
+        return _require_utc(v, field="ts")

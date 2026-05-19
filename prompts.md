@@ -190,3 +190,102 @@ uv.lock                                            |   6 +-
 **Notes / discipline incidents:** None this turn. The ruff TC\* / mypy aiosqlite.Row frictions were design-time decisions surfaced and resolved before commit, not violations.
 
 ---
+
+## Turn 4 — Anomaly Detection Engine + Public Ingestion API (42 tests, 96.37 % coverage)
+
+**Timestamp:** t ≈ 1:05
+**Elapsed at end of turn:** ~1:50
+
+**Human prompt (verbatim):**
+
+```
+Build the anomaly detection engine and the public ingestion API.
+
+Detection algorithm (do not invent — implement what I describe):
+- Maintain per-(service, level) rolling baselines using exponentially weighted moving average (EWMA) for mean and Welford's online algorithm for variance. Window: last 1h, bucketed into 60 one-minute buckets.
+- On each minute-tick, compute current bucket's event count. Anomaly fires if `z_score = (count - mean) / max(stddev, 1.0) > configurable_threshold` (default 3.0) AND `count >= min_absolute_floor` (default 5; prevents alerts on tiny baselines).
+- Algorithm chosen for: O(1) update, robust to drift, no scipy dependency. Note this in a docstring with a one-line citation to Welford 1962.
+
+Deliverables:
+1. `packages/watchdog-core/src/watchdog_core/detection/baseline.py` — `EWMABaseline` class with `update(count: int) -> None`, `current() -> tuple[mean, stddev]`. Pure, deterministic, no I/O. Unit-tested with hypothesis for numerical stability.
+2. `packages/watchdog-core/src/watchdog_core/detection/detector.py` — `AnomalyDetector` orchestrates buckets per `(service, level)` key. Method `observe(event: LogEvent) -> list[AnomalyWindow]`. Returns anomalies fired by this event. State is in-process for MVP; add a comment explaining how this would move to Redis if horizontally scaled (Senior must surface the trade-off, not hide it).
+3. `apps/api/src/watchdog_api/main.py` — FastAPI app factory `create_app(settings)` (factory pattern, not module-level app, so tests can inject overrides).
+4. `apps/api/src/watchdog_api/routes/ingestion.py` — `POST /v1/events` accepts `LogEventIn` (Pydantic), batches up to 1000 per request, returns `202 Accepted` with `{"accepted": N, "rejected": [...]}`. Routes call `IngestionService.ingest_batch`. NO SQL here. NO business validation here beyond Pydantic shape.
+5. `apps/api/src/watchdog_api/routes/health.py` — `GET /healthz` returns liveness (always 200 if process up). `GET /readyz` returns readiness (verifies SQLite connection and last migration version). Distinguish liveness vs readiness explicitly in docstrings.
+6. `apps/api/src/watchdog_api/dependencies.py` — FastAPI dependency-injection wiring: `get_db()`, `get_log_repo()`, `get_ingestion_service()`. Override-friendly for tests.
+7. `apps/api/src/watchdog_api/config.py` — Pydantic Settings v2, reads from env, validates SQLite path is writable on startup.
+8. Tests in `apps/api/tests/`:
+   - `test_ingestion_route.py` using `httpx.AsyncClient` with `ASGITransport`. Verifies 202, batch limit (1001 -> 422), idempotency.
+   - `test_detection.py` — synthetic timeseries that triggers a known anomaly; assert AnomalyWindow shape and z-score band.
+
+Quality bar: coverage on `watchdog_api` >=80%, integration test `POST /v1/events -> GET /readyz` round trip green. mypy strict zero errors. ruff zero warnings. Print the test summary then update prompts.md and report Elapsed Time.
+```
+
+**AI action summary:**
+
+1. **Detection engine — EWMA + Welford as a hybrid, NOT invented.** `baseline.py` cites Welford 1962 ("Note on a method for calculating corrected sums of squares and products", Technometrics 4(3)) and explains the numerical-stability rationale for the `delta * (x - new_mean)` update against the catastrophic-cancellation textbook form. `alpha = 2/(N+1) = 2/61` derives directly from the 60-bucket effective-window framing. `current()` returns `(mean, 0.0)` until `n >= _MIN_SAMPLES_FOR_STDDEV` (extracted constant after ruff PLR2004 surfaced the magic `2`).
+2. **Detector — `AnomalyDetector.observe(event)` per the spec.** Per-`(service, level)` state in a `dict[tuple[str, str], _BucketState]`. Algorithm: floor ts to minute, on bucket-boundary crossing close the previous bucket (z-check + baseline update), roll gap minutes through as zero buckets (so idle services don't bias upward), reset. Late events (`event_minute < current_minute`) are silently dropped — explicitly out-of-scope for MVP. The senior-grade trade-off note ("how does this move to Redis when we outgrow one worker") is a multi-paragraph module-level docstring covering three options in increasing operational cost: consistent-hash routing, Redis HSET + WATCH/MULTI, or a streaming engine (Bytewax / Kafka Streams / Flink).
+3. **API surface — factory + Annotated DI + lifespan migrations.**
+   - `main.create_app(settings: Settings | None = None)` is the only public entry; tests inject a temp-DB `Settings`, production calls with no args (`load_settings()` reads env).
+   - `Settings` is Pydantic v2 with `env_prefix="WATCHDOG_"`, `case_sensitive=False`, `.env` support, `extra="ignore"`. `field_validator` enforces the `sqlite+aiosqlite:///` URL scheme at load-time; the lifespan does the filesystem writability check by running `apply_migrations` (a failed INSERT into `schema_migrations` raises and the app refuses to start).
+   - `dependencies.py` uses the **Annotated** DI pattern (`Annotated[..., Depends(callable)]`) instead of `Depends()` in function defaults, so ruff's B008 stays satisfied without pyproject carve-outs. Three layers wired: `DbDep → LogRepoDep → IngestionServiceDep`.
+   - `routes/ingestion.py`: `BatchIngestRequest.events = Field(min_length=1, max_length=1000)` — Pydantic returns 422 automatically on empty _or_ >1000 batches. The route does NOT contain business validation beyond Pydantic; it dispatches to `IngestionService.ingest_batch` (new method added this turn to `services/ingestion_service.py`) which collects `(idx, reason)` rejections for both `EventRejectedError` AND dedupe `None` returns.
+   - `routes/health.py`: `/healthz` is liveness-only (200 if the process can respond — explicitly does NOT touch the DB); `/readyz` exercises `db.execute("SELECT MAX(version) FROM schema_migrations")` and returns 503 with details on either `aiosqlite.Error` OR a missing-migration row. The docstrings explicitly distinguish liveness (restart-trigger) from readiness (LB-gate).
+4. **Domain shape added.** `LogEventDraft` is appended to `domain/models.py` (frozen + extra=forbid + UTC validator) — used by both the route as the wire model and `ingest_batch` as the input type, so the API/service share one source of truth.
+5. **Tests — 19 new cases (5 baseline + 5 detector + 9 route/health).**
+   - `tests/test_baseline.py`: 3 deterministic + 2 Hypothesis property tests (finite mean/stddev for any int sequence, EWMA mean stays inside `[min(values), max(values)]`).
+   - `tests/test_detection.py`: 5 synthetic-timeseries cases — steady-baseline silence, 50-event spike fires with assertions on `count`, `window_start/window_end`, `z_score > 3.0`; floor-suppressed silence; per-key isolation (a `worker` spike does not affect `api` baseline); late-event drop.
+   - `tests/test_ingestion_route.py`: 9 integration cases via `httpx.AsyncClient` + `ASGITransport` with `app.router.lifespan_context` manually entered so migrations apply against the temp DB — covers `/healthz`, `/readyz`, happy-202, empty-422, oversized-422 (1001 events), dedupe (index in `rejected[]` + reason="duplicate"), `extra="forbid"` rejection, 24 h-rejection, and the explicit `POST /v1/events → GET /readyz` round-trip the brief required.
+6. **Tooling friction — one PLR2004 + one false-friend.** Ruff flagged `if self._n < 2:` as a magic-number comparison (`PLR2004`) — extracted `_MIN_SAMPLES_FOR_STDDEV = 2` with an inline rationale comment. The PostToolUse formatter (auto-removes F401 unused-imports) dropped my newly-added `LogEventDraft` import from `ingestion_service.py` _between_ my two Edit calls (the function consumer was added in a later edit); detected from `F821 Undefined name 'LogEventDraft'`, re-added the import, ruff green.
+7. **One test misdesign caught + fixed.** `test_detector_silent_when_count_below_floor` originally accumulated 1+4=5 events vs `min_floor=5`, which triggers (the condition is `count >= floor`). Reduced loop range from 4 to 3 → count=4 < floor=5 → correctly silent. The fix didn't weaken the test's _intent_ (still validates below-floor suppression), just the off-by-one in the synthetic data.
+
+**Verification:**
+
+```
+ruff check .                 → All checks passed!
+black --check .              → all files unchanged
+mypy --strict (20 sources)   → Success: no issues found in 20 source files
+pytest                       → 42 passed in 1.61s
+coverage TOTAL               → 96.37 %  (gate: 80 %)
+   watchdog_api/
+     ├── config.py            85 %  (uncovered: env-validator error branch)
+     ├── dependencies.py     100 %
+     ├── main.py             100 %
+     ├── routes/health.py     82 %  (uncovered: aiosqlite.Error 503 branch)
+     └── routes/ingestion.py 100 %
+   watchdog_core/
+     ├── detection/baseline.py    100 %
+     ├── detection/detector.py    100 %
+     ├── domain/hashing.py        100 %
+     ├── domain/models.py          93 %
+     ├── persistence/migrations.py 100 %
+     ├── persistence/repositories.py 97 %
+     └── services/ingestion_service.py 97 %
+```
+
+**Diff summary (`git diff --cached --stat`):**
+
+```
+apps/api/src/watchdog_api/config.py                |  57 ++++++++
+apps/api/src/watchdog_api/dependencies.py          |  51 +++++++
+apps/api/src/watchdog_api/main.py                  |  56 ++++++++
+apps/api/src/watchdog_api/routes/__init__.py       |   0
+apps/api/src/watchdog_api/routes/health.py         |  50 +++++++
+apps/api/src/watchdog_api/routes/ingestion.py      |  56 ++++++++
+apps/api/tests/conftest.py                         |  25 ++++
+apps/api/tests/test_detection.py                   | 100 +++++++++++++
+apps/api/tests/test_ingestion_route.py             | 156 +++++++++++++++++++++
+packages/.../detection/__init__.py                 |   0
+packages/.../detection/baseline.py                 |  81 +++++++++++
+packages/.../detection/detector.py                 | 146 +++++++++++++++++++
+packages/.../domain/models.py                      |  22 +++
+packages/.../services/ingestion_service.py         |  32 ++++-
+packages/watchdog-core/tests/test_baseline.py      |  69 +++++++++
+                                  15 files, 900 insertions(+), 1 deletion(-)
+```
+
+**Staging discipline:** explicit paths only (two file-level edits + four subtrees by name + one new test file). `submission/tagle-tag.{md,png}` correctly `??`.
+
+**Notes / discipline incidents:** None this turn. PLR2004 / F821 / test off-by-one were design-time issues surfaced by the verification gate, not violations of the discipline.
+
+---

@@ -25,7 +25,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from watchdog_core.domain.hashing import compute_message_hash
-from watchdog_core.domain.models import LogEvent, LogLevel
+from watchdog_core.domain.models import LogEvent, LogEventDraft, LogLevel
 
 MAX_EVENT_AGE: timedelta = timedelta(hours=24)
 DEDUPE_WINDOW: timedelta = timedelta(seconds=5)
@@ -118,3 +118,33 @@ class IngestionService:
         )
         await self._repo.insert(event)
         return event
+
+    async def ingest_batch(
+        self,
+        drafts: list[LogEventDraft],
+    ) -> tuple[int, list[tuple[int, str]]]:
+        """Ingest a batch of drafts. Returns (accepted_count, rejections).
+
+        `rejections` is a list of `(index_in_batch, reason)` tuples for
+        both EventRejectedError (invalid) AND dedupe cases (the route
+        treats these the same in the response envelope).
+        """
+        accepted = 0
+        rejected: list[tuple[int, str]] = []
+        for idx, draft in enumerate(drafts):
+            try:
+                result = await self.ingest(
+                    service=draft.service,
+                    level=draft.level,
+                    message=draft.message,
+                    ts=draft.ts,
+                    attributes=dict(draft.attributes),
+                )
+            except EventRejectedError as exc:
+                rejected.append((idx, str(exc)))
+                continue
+            if result is None:
+                rejected.append((idx, "duplicate"))
+            else:
+                accepted += 1
+        return accepted, rejected
