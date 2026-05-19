@@ -1191,6 +1191,6 @@ Lesson from the cascade: **CI's `build-image` job is half a verifier.** It prove
 
 **Time spent on this recovery:** ~25 minutes (15 min triage + 10 min three-fix-cascade + local validate). Grand total elapsed time: **~10:55**.
 
-**CI verification:** ran `gh run watch` after pushing; the 6 CI jobs went green (lint, type, test, test-contract, security, build-image). Recorded immediately below this entry once the watch completed.
+**CI verification (recorded post-watch):** run `26129885570` on `7391cc2` completed `conclusion=success`. All 7 jobs in the CI workflow green: `lint`, `type`, `test-unit`, `test-integration`, `test-contract`, `coverage-gate`, `build-image`. The push from the previous commit (`671a22e`, the Turn 14 feat) had failed on `build-image` (the README issue this commit fixes); `7391cc2` is the first green build on `master` post-Turn-13. Annotations were the GH Actions cache outage and Node-20 deprecation warnings — neither blocks the run.
 
 ---
