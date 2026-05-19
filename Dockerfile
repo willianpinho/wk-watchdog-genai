@@ -30,7 +30,7 @@
 # =============================================================================
 
 # ---------- Stage 1: builder ----------
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -67,7 +67,7 @@ RUN uv sync --frozen --no-dev --all-packages
 
 
 # ---------- Stage 2: runtime ----------
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ARG GIT_REV=unknown
 ARG VERSION=0.0.0
