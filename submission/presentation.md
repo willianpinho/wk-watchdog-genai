@@ -5,6 +5,28 @@ paginate: true
 size: 16:9
 title: "wk-watchdog — Intelligent Observability & Event Watchdog"
 author: "Willian Pinho · Senior GenAI Engineer Vibe-Coding submission"
+style: |
+  section {
+    font-size: 22px;
+    padding: 50px 60px;
+    line-height: 1.45;
+  }
+  section h1 { font-size: 36px; margin-bottom: 18px; }
+  section h2 { font-size: 28px; }
+  section ul, section ol { margin: 0; padding-left: 1.2em; }
+  section li { margin-bottom: 6px; }
+  section table { font-size: 18px; }
+  section pre { font-size: 16px; line-height: 1.35; }
+  section code { font-size: 0.95em; }
+  section.dense {
+    font-size: 17px;
+    padding: 40px 50px;
+    line-height: 1.35;
+  }
+  section.dense h1 { font-size: 28px; margin-bottom: 12px; }
+  section.dense ul li { margin-bottom: 4px; }
+  section.dense table { font-size: 15px; }
+  section.dense pre { font-size: 13px; line-height: 1.3; }
 ---
 
 # wk-watchdog
@@ -45,6 +67,8 @@ schema-enforced LLM output and a transactional outbox for delivery.
 - **Real SDK.** Sync + async, drop-in stdlib `logging` integration.
 
 ---
+
+<!-- _class: dense -->
 
 # GenAI specifics
 
@@ -98,6 +122,8 @@ LogEventRepository.insert_many`); test pins the hierarchy.
 
 ---
 
+<!-- _class: dense -->
+
 # SDK — designing SDKs is the JD differentiator
 
 ```python
@@ -139,6 +165,8 @@ lands at the sink ≤ 5 s later.
 
 ---
 
+<!-- _class: dense -->
+
 # Trade-offs & next 16 h
 
 | What I would tighten next                                                                                                 | Why                                                                             |
@@ -151,6 +179,8 @@ lands at the sink ≤ 5 s later.
 | **Real eval against the live Anthropic API**, with golden-set drift detection.                                            | Today's eval is fully mocked for CI hygiene; production needs both.             |
 
 ---
+
+<!-- _class: dense -->
 
 # Reflection — what worked
 
