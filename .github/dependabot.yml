@@ -1,0 +1,54 @@
+version: 2
+
+updates:
+  # Python deps (uv + pyproject.toml across the workspace).
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 8
+    labels: [dependencies, python]
+    commit-message:
+      prefix: chore(deps)
+
+  # GitHub Actions versions across .github/workflows/*.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 5
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: chore(deps-ci)
+
+  # Base image (Dockerfile FROM lines).
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 3
+    labels: [dependencies, docker]
+    commit-message:
+      prefix: chore(deps-docker)
+
+  # docker-compose service images (jaeger, prometheus, grafana, etc.)
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: "UTC"
+    open-pull-requests-limit: 3
+    labels: [dependencies, docker]
+    commit-message:
+      prefix: chore(deps-compose)

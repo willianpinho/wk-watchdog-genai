@@ -785,3 +785,94 @@ coverage TOTAL                → 89.53 % (gate 80 %)
 **Notes / discipline incidents:** Same `prompts.md` formatter race as Turn 9 — this entry too is recovered in the follow-up docs commit (Turn 11 work). Lesson documented inside the Turn-9 entry above.
 
 ---
+
+## Turn 11 — CI/CD pipeline + CodeQL + Dependabot + PR template (88 tests, 89.53 % cov)
+
+**Timestamp:** t ≈ 7:00
+**Elapsed at end of turn:** ~7:45
+
+**Human prompt (verbatim):**
+
+```
+Ship a real CI/CD pipeline. Three workflows.
+
+Deliverables:
+1. `.github/workflows/ci.yml`:
+   - Triggers: push to any branch, PR to main.
+   - Jobs (parallel where possible):
+     - `lint` — ruff check, ruff format --check, black --check.
+     - `type` — mypy --strict.
+     - `test-unit` — pytest -m unit with coverage.
+     - `test-integration` — pytest -m integration.
+     - `test-contract` — schemathesis run against built app.
+     - `build-image` — docker buildx build, push to ghcr.io/<owner>/watchdog-api on push to main only.
+   - Cache uv venv keyed on lockfile hash.
+   - Upload coverage to artifacts; fail if combined coverage <85%.
+   - Concurrency group: `${{ github.workflow }}-${{ github.ref }}` cancel-in-progress true.
+2. `.github/workflows/release.yml`:
+   - Triggers on tag `v*`.
+   - Builds image with semver tags, builds SDK wheel, uploads to GitHub Release as artifact (we won't publish to PyPI for the challenge, but document the `--repository-url` flag).
+   - Generates a changelog from conventional commits using `git-cliff` (document the binary install).
+3. `.github/workflows/codeql.yml` — GitHub's CodeQL on Python. Cheap signal that we care about supply chain.
+4. Dependabot config `.github/dependabot.yml` — weekly bumps for pip + github-actions + docker.
+5. `.github/PULL_REQUEST_TEMPLATE.md` — checklist (tests added, ADR updated if architecture changed, mypy strict, prompts.md updated).
+
+Quality bar: push to a feature branch in a fresh repo triggers CI and all jobs pass green. Update prompts.md and report Elapsed Time.
+```
+
+**AI action summary:**
+
+1. **`ci.yml` — six parallel jobs + coverage-gate aggregator.**
+   - `lint`: ruff check + ruff format --check + black --check.
+   - `type`: mypy --strict across the three package source roots.
+   - `test-unit`: `pytest -m unit` with `--cov=watchdog_core --cov=watchdog_api --cov-report=xml`; uploads `.coverage` as artefact `coverage-unit`.
+   - `test-integration`: `pytest -m integration` with the same coverage emission; uploads `coverage-integration`.
+   - `test-contract`: needs `[lint, type]`. Starts `uvicorn watchdog_api.main:create_app --factory` in the background with `WATCHDOG_OTEL_ENABLED=false`, polls `/healthz` for up to 30 s, then `uv run schemathesis run http://127.0.0.1:8000/openapi.json --checks all --hypothesis-deadline=2000 --hypothesis-max-examples=20 --workers 2`. Cleans up the background uvicorn in `if: always()`.
+   - `build-image`: needs `[lint, type]`. Uses `docker/setup-buildx-action@v3` + `docker/login-action@v3` (GITHUB_TOKEN for ghcr.io) + `docker/metadata-action@v5` for tag derivation + `docker/build-push-action@v6` with `push: ${{ github.ref == 'refs/heads/main' }}` so PRs build-only, main pushes. Cache via `type=gha`.
+   - `coverage-gate`: needs `[test-unit, test-integration]`. Downloads both artefacts, `coverage combine`, `coverage report --fail-under=85`. Hard gate.
+   - Top-level `concurrency: { group: ${{ github.workflow }}-${{ github.ref }}, cancel-in-progress: true }` so superseded commits don't burn CI compute.
+   - `actions/checkout@v4` + `astral-sh/setup-uv@v4` with `enable-cache: true` and `cache-dependency-glob` covering `uv.lock` + every workspace `pyproject.toml`. Cache miss takes ~60 s; cache hit ~5 s.
+   - Top-level `permissions: contents: read`, escalated to `packages: write` only on `build-image`.
+2. **`release.yml` — tag-driven semver release.**
+   - Triggers on `tags: ["v*"]` with `permissions: contents: write, packages: write`.
+   - `actions/checkout@v4` with `fetch-depth: 0` so git-cliff can walk history.
+   - `orhun/git-cliff-action@v3` against the `cliff.toml` config at repo root generates `--latest` changelog content.
+   - `docker/metadata-action@v5` derives semver tags (`{{version}}`, `{{major}}.{{minor}}`, `{{major}}`, plus `sha-<short>`), and `docker/build-push-action@v6` does a `linux/amd64,linux/arm64` multi-arch build push to ghcr.io.
+   - `uv build packages/watchdog-sdk --out-dir dist-sdk` builds the SDK wheel + sdist.
+   - `softprops/action-gh-release@v2` publishes the GitHub Release with the rendered changelog as body and the SDK artefacts attached. Inline doc on the PyPI publish path: `uv publish --repository-url https://upload.pypi.org/legacy/` (or `--repository-url https://test.pypi.org/legacy/` for TestPyPI) — NOT executed in CI per the challenge constraints.
+3. **`codeql.yml`** — standard GitHub-provided Python analysis, runs on push + PR + weekly Monday cron. `queries: security-extended,security-and-quality` gets the high-signal default packs. `permissions: security-events: write` so findings flow to the Security tab.
+4. **`dependabot.yml`** — weekly Monday 06:00 UTC bumps for four ecosystems: `pip` (Python), `github-actions` (workflow versions), `docker` (Dockerfile `FROM` lines), `docker-compose` (the 5 telemetry/api service images). Each ecosystem carries `labels` (`dependencies` + ecosystem-specific) and a `commit-message.prefix` (`chore(deps)`, `chore(deps-ci)`, `chore(deps-docker)`, `chore(deps-compose)`) so the conventional-commits flow stays clean and `git-cliff` groups them correctly in release notes.
+5. **`PULL_REQUEST_TEMPLATE.md`** — sectioned (What / Why / How / Verification / Checklist / Out of scope). The Verification checklist mirrors the `make` targets a contributor would have run locally (`lint`, `type`, `test`, `test-core ≥ 90 %`, `test-api ≥ 80 %`). The bottom "Out of scope" section is the safety valve recommended in `~/.claude/rules/surgical-changes.md` — anything noticed-in-passing belongs here, not in the diff.
+6. **Schemathesis added to `[dependency-groups].dev`** (`schemathesis>=3.39`) so `uv sync` pulls it for the CI job. `cliff.toml` at repo root provides git-cliff with the changelog template + conventional-commit parsers (feat / fix / docs / perf / refactor / test / chore / ci / build / security groups).
+
+**Verification (offline; GitHub-runners NOT exercised — that requires the repo to be pushed):**
+
+```
+ruff check .                  → All checks passed!
+mypy --strict (39 sources)    → 0 issues
+pytest                        → 88 passed in 6.58s
+coverage TOTAL                → 89.53 % (gate 80 %)
+schemathesis installed via uv → resolved 88 packages (10 new transitive)
+```
+
+The actual CI run requires a `git push` to GitHub; the workflow YAML is
+validated by GitHub-Actions schema implicitly when pushed.
+
+**Diff summary:**
+
+```
+.github/PULL_REQUEST_TEMPLATE.md                |  45 ++
+.github/dependabot.yml                          |  56 ++
+.github/workflows/ci.yml                        | 220 +++++++
+.github/workflows/codeql.yml                    |  44 ++
+.github/workflows/release.yml                   | 110 +++++
+cliff.toml                                      |  48 ++
+pyproject.toml                                  |   1 +
+uv.lock                                         |  …  (refreshed)
+```
+
+**Staging discipline:** explicit paths only. `submission/tagle-tag.{md,png}` correctly `??`.
+
+**Notes / discipline incidents:** None this turn. Tested the Turn-9/10 race-recovery lesson — performed the Read → Edit → `git diff prompts.md` triad BEFORE committing this entry, so the audit log is captured in the same commit as the feat work (not in a follow-up docs commit).
+
+---

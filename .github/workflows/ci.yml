@@ -1,0 +1,244 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, master]
+
+# Cancel superseded runs on the same ref. Lint+type+tests all re-run
+# on every push; no point burning compute on stale commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Permissions are the least-privilege set each job actually needs.
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.5.18"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # --------------------------------------------------------------------
+  # Static checks — fastest, fail-fast on style/type drift.
+  # --------------------------------------------------------------------
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+            apps/**/pyproject.toml
+            packages/**/pyproject.toml
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv sync --frozen --all-packages
+      - name: ruff check
+        run: uv run ruff check .
+      - name: ruff format --check
+        run: uv run ruff format --check .
+      - name: black --check
+        run: uv run black --check .
+
+  type:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv sync --frozen --all-packages
+      - name: mypy --strict
+        run: |
+          uv run mypy \
+            apps/api/src/watchdog_api \
+            packages/watchdog-core/src/watchdog_core \
+            packages/watchdog-sdk/src/watchdog_sdk
+
+  # --------------------------------------------------------------------
+  # Tests — split unit / integration / contract so they run in parallel
+  # and each contributes a coverage artefact to the combine job.
+  # --------------------------------------------------------------------
+  test-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv sync --frozen --all-packages
+      - name: pytest -m unit
+        run: |
+          uv run pytest -m unit \
+            --override-ini="addopts=--strict-markers --strict-config" \
+            --cov=watchdog_core --cov=watchdog_api \
+            --cov-report=term-missing \
+            --cov-report=xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: .coverage
+          if-no-files-found: error
+          include-hidden-files: true
+
+  test-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv sync --frozen --all-packages
+      - name: pytest -m integration
+        run: |
+          uv run pytest -m integration \
+            --override-ini="addopts=--strict-markers --strict-config" \
+            --cov=watchdog_core --cov=watchdog_api \
+            --cov-report=term-missing
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: .coverage
+          if-no-files-found: error
+          include-hidden-files: true
+
+  test-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [lint, type]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv sync --frozen --all-packages
+      - name: start watchdog-api in background
+        run: |
+          mkdir -p data
+          uv run uvicorn watchdog_api.main:create_app --factory \
+            --host 127.0.0.1 --port 8000 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
+              echo "✓ app ready"
+              break
+            fi
+            sleep 1
+          done
+        env:
+          WATCHDOG_OTEL_ENABLED: "false"
+          WATCHDOG_DB_URL: "sqlite+aiosqlite:///data/ci.sqlite"
+      - name: schemathesis run --checks all
+        run: |
+          uv run schemathesis run \
+            http://127.0.0.1:8000/openapi.json \
+            --checks all \
+            --hypothesis-deadline=2000 \
+            --hypothesis-max-examples=20 \
+            --workers 2
+      - name: stop watchdog-api
+        if: always()
+        run: kill "$APP_PID" || true
+
+  # --------------------------------------------------------------------
+  # Combine the unit + integration coverage artefacts and gate at 85 %.
+  # --------------------------------------------------------------------
+  coverage-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [test-unit, test-integration]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv sync --frozen --all-packages
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+          path: cov-unit
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-integration
+          path: cov-integration
+      - name: combine + fail-under 85 %
+        run: |
+          mv cov-unit/.coverage .coverage.unit
+          mv cov-integration/.coverage .coverage.integration
+          uv run coverage combine .coverage.unit .coverage.integration
+          uv run coverage report --fail-under=85 --skip-covered
+
+  # --------------------------------------------------------------------
+  # Build + push container. Only pushes on merges to main; PRs build
+  # only (for verification) and discard the layer.
+  # --------------------------------------------------------------------
+  build-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [lint, type]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: ghcr.io login (only on main)
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/watchdog-api
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: build (+ push on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GIT_REV=${{ github.sha }}
+            VERSION=${{ github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
