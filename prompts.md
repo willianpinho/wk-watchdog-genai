@@ -876,3 +876,77 @@ uv.lock                                         |  …  (refreshed)
 **Notes / discipline incidents:** None this turn. Tested the Turn-9/10 race-recovery lesson — performed the Read → Edit → `git diff prompts.md` triad BEFORE committing this entry, so the audit log is captured in the same commit as the feat work (not in a follow-up docs commit).
 
 ---
+
+## Turn 12 — CI fix: ruff format + black agreement + master/main branch ref
+
+**Timestamp:** t ≈ 7:45
+**Elapsed at end of turn:** ~8:15
+
+**Human prompt (verbatim):**
+
+```
+CI failed on master push (commit 02a3fc4). Three issues in .github/workflows/ci.yml to fix:
+
+1. lint job failed: `ruff format --check` reported formatting violations.
+   Apply the fix: run `uv run ruff format .` locally, then `make lint` to verify clean.
+
+2. build-image job has `if: github.ref == 'refs/heads/main'` but the repo's
+   default branch is `master`. Change the condition to:
+   `if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')`
+   so it works whether the default is master or main.
+
+3. test-contract was skipped due to `needs: [lint, type]` cascading from #1.
+   Fixing #1 unblocks it.
+
+Apply the fixes, run `make all` locally (must be green), commit as
+`fix(ci): apply ruff format and correct branch ref for build-image`,
+push, then watch the CI run with `gh run watch --repo willianpinho/wk-watchdog-genai`.
+Confirm all 6 jobs go green. Update prompts.md with this fix entry.
+```
+
+**AI action summary:**
+
+1. **`uv run ruff format .` ran** — reformatted 4 test files into ruff's preferred multi-line-assert shape (message wrapped in parens after `assert <cond>,`). `ruff format --check .` clean afterwards.
+2. **Discovered a second conflict.** `black --check .` then complained on the SAME 4 files because **black wraps the condition** (`assert (\n    <cond>\n), <msg>`) while ruff format **wraps the message** (`assert <cond>, (\n    <msg>\n)`). Both formatters are stable in their preferences; running them serially oscillates. The original CI failure only surfaced ruff's complaint because step 2 (`ruff format --check`) failed-fast before step 3 (`black --check`) ran.
+3. **Resolution — surgical rewrite, not architectural drop.** Instead of removing `black --check` from CI (which would be a bigger architectural change than the brief intended), I rewrote each of the 4 multi-line asserts to use a pre-bound message variable:
+   ```python
+   msg = f"long format-string message {with_locals}"
+   assert short_condition, msg
+   ```
+   This makes both `assert` and `msg` fit on a single line each, no wrapping needed, both formatters leave the code alone. Files touched: `apps/api/tests/test_contract_openapi.py`, `apps/api/tests/test_otel_smoke.py`, `packages/watchdog-core/tests/test_aggregation_queries.py`, `packages/watchdog-core/tests/test_traced_execute.py`. Also replaced the `≥` glyph in `test_traced_execute.py` with `>=` to stay clear of any future RUF002 (already covered by the message-variable rewrite but belt-and-braces).
+4. **build-image branch condition fixed.** Two places in `ci.yml`:
+   - The `ghcr.io login` step: `if: github.ref == 'refs/heads/main'` → `if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')`.
+   - The `build (+ push)` step's `push:` expression: same condition pair. The push now fires on default-branch pushes whether the repo names that branch `master` (current) or `main` (future migration); PRs always build-verify but don't push.
+5. **`test-contract` unblocked transitively.** Its `needs: [lint, type]` cascade was the root cause of the skip — once `lint` goes green, `test-contract` runs the uvicorn-in-background + `schemathesis run` block as designed.
+
+**Verification (offline):**
+
+```
+ruff check .                  → All checks passed!
+ruff format --check .         → 64 files already formatted
+black --check .               → 64 files unchanged
+mypy --strict (39 sources)    → 0 issues
+pytest                        → 88 passed in 6.00s
+coverage (make test-core)     → ≥ 90 % over watchdog_core
+coverage (make test-api)      → 87.25 % over watchdog_api (gate 80 %)
+```
+
+**Diff summary:**
+
+```
+.github/workflows/ci.yml                              | 4 +-
+apps/api/tests/test_contract_openapi.py               | 5 ++--
+apps/api/tests/test_otel_smoke.py                     | 7 ++++--
+packages/watchdog-core/tests/test_aggregation_queries.py | 9 +++++----
+packages/watchdog-core/tests/test_traced_execute.py    | 5 +++--
+prompts.md                                            | (this entry)
+                                                  6 files, ~40 lines net
+```
+
+**Commit message (verbatim):** `fix(ci): apply ruff format and correct branch ref for build-image`.
+
+**Staging discipline:** explicit paths only. Tagle files remain untracked.
+
+**Notes / discipline incidents:** None. The Turn 9/10 lesson held — `git diff prompts.md` will verify the audit entry is staged before commit. Documented the ruff-vs-black resolution philosophy inline (surgical rewrite over architectural drop) so the next contributor understands WHY the multi-line asserts use the variable-binding shape.
+
+---

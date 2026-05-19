@@ -69,12 +69,10 @@ async def test_span_hierarchy_post_ingest_batch_insert_many(otel_client) -> None
     span_names = {s.name for s in spans}
 
     # The brief's required hierarchy:
-    assert (
-        "IngestionService.ingest_batch" in span_names
-    ), f"missing ingest_batch span; saw {span_names}"
-    assert (
-        "LogEventRepository.insert_many" in span_names
-    ), f"missing insert_many span; saw {span_names}"
+    msg_ingest = f"missing ingest_batch span; saw {span_names}"
+    assert "IngestionService.ingest_batch" in span_names, msg_ingest
+    msg_insert = f"missing insert_many span; saw {span_names}"
+    assert "LogEventRepository.insert_many" in span_names, msg_insert
 
     # FastAPIInstrumentor emits a server span for the route — the exact
     # name varies across versions, so we assert the *presence* of any
