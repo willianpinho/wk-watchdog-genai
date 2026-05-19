@@ -1040,11 +1040,15 @@ name = "watchdog-core"
 version = "0.1.0"
 source = { editable = "packages/watchdog-core" }
 dependencies = [
+    { name = "aiosqlite" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.9" }]
+requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.20" },
+    { name = "pydantic", specifier = ">=2.9" },
+]
 
 [[package]]
 name = "watchdog-sdk"

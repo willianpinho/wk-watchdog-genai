@@ -74,7 +74,21 @@ ignore = [
   "TD002",  # TODO author missing
   "TD003",  # TODO link missing
   "CPY001", # copyright header — single-author repo, no policy yet
+  # ---- flake8-type-checking — net-negative for this codebase ----
+  # The TC family pushes annotation-only imports into `if TYPE_CHECKING:`
+  # blocks to shave milliseconds from import time. For an application
+  # MVP that boilerplate is pure cost. Worse: Pydantic v2 models
+  # resolve annotations via get_type_hints at class-construction time
+  # and will raise NameError if `UUID`, `datetime`, etc. are gated
+  # behind TYPE_CHECKING. We turn TC001-TC003 off explicitly.
+  "TC001", "TC002", "TC003",
 ]
+
+[tool.ruff.lint.flake8-type-checking]
+# Belt-and-braces in case TC rules are re-enabled later: tell ruff that
+# anything subclassing pydantic.BaseModel needs runtime-resolvable
+# annotations.
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = [

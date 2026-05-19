@@ -1,13 +1,18 @@
 [project]
 name = "watchdog-core"
 version = "0.1.0"
-description = "wk-watchdog domain core (pure types, zero infrastructure)"
+# Note (Turn 3): the ADR-001 framing of watchdog-core as "pure domain"
+# is amended; this package now also hosts the persistence layer
+# (repositories + migrations) per the Turn 3 spec. ADR-002 will
+# formalize the boundary shift when it stabilizes.
+description = "wk-watchdog domain core + SQLite persistence layer"
 readme = "../../README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Willian Pinho", email = "willianpinho@gmail.com" }]
 license = { text = "MIT" }
 dependencies = [
   "pydantic>=2.9",
+  "aiosqlite>=0.20",
 ]
 
 [build-system]
