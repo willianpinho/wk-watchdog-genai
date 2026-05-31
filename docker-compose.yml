@@ -58,7 +58,7 @@ services:
     networks: [backend, observability]
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.111.0
+    image: otel/opentelemetry-collector-contrib:0.152.0
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ./docker/otelcol-config.yaml:/etc/otelcol/config.yaml:ro
